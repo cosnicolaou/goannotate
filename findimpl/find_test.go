@@ -101,7 +101,7 @@ func TestFunctions(t *testing.T) {
 	compareLocations(t, finder.Locations(), []string{
 		here + "data.Fn2 func",
 	}, []string{
-		here + "data/functions.go:12:6",
+		here + "data/functions.go:11:6",
 	})
 
 	err = finder.AddFunctions(ctx,
@@ -115,7 +115,7 @@ func TestFunctions(t *testing.T) {
 		here + "data.Fn2 func",
 	}, []string{
 		here + "data/functions.go:7:6",
-		here + "data/functions.go:12:6",
+		here + "data/functions.go:11:6",
 	})
 }
 
@@ -134,7 +134,7 @@ func TestFunctionsAndInterfaces(t *testing.T) {
 		here + "data.Fn2 func",
 		here + "data.Ifc3 interface",
 	}, []string{
-		here + "data/functions.go:12:6",
+		here + "data/functions.go:11:6",
 		here + "data/interfaces.go:16:6",
 	})
 }

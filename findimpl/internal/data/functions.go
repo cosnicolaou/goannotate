@@ -8,7 +8,12 @@ func Fn1() error {
 	return nil
 }
 
-
 func Fn2(a int) error {
 	return nil
+}
+
+type rcv struct{}
+
+func (r *rcv) Fn1() {
+
 }
