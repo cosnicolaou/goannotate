@@ -12,7 +12,6 @@ import (
 	"go/token"
 	"go/types"
 	"os"
-	"runtime"
 	"strings"
 	"sync"
 
@@ -29,16 +28,15 @@ func packageName(typ string) (string, string) {
 
 // T represents an implementation finder.
 type T struct {
-	builder build.Context
-	fset    *token.FileSet
-	mu      sync.Mutex
-	// GUARDED_BY(mu), indexed by package path
-	built   map[string]*build.Package
-	parsed  map[string]*ast.Package
-	checked map[string]*types.Info
-	ifcs    map[string]*types.Interface
-	fns     map[string]*types.Func
-	pos     map[string]token.Position
+	fset *token.FileSet
+	mu   sync.Mutex
+	// GUARDED_BY(mu), indexed by <package-path>.<name>
+	built      map[string]*build.Package
+	parsed     map[string]*ast.Package
+	checked    map[string]*types.Info
+	ifcs       map[string]*types.Interface
+	fns, impls map[string]*types.Func
+	pos        map[string]token.Position
 }
 
 func (t *T) build(pkgPath string) (*build.Package, error) {
@@ -48,7 +46,8 @@ func (t *T) build(pkgPath string) (*build.Package, error) {
 	if built != nil {
 		return built, nil
 	}
-	built, err := t.builder.Import(pkgPath, ".", 0)
+	context := build.Default
+	built, err := context.Import(pkgPath, ".", build.FindOnly)
 	if err != nil {
 		return nil, fmt.Errorf("failed to import %v: %w", pkgPath, err)
 	}
@@ -107,7 +106,7 @@ func (t *T) buildParseAndCheck(pkgPath string) (*build.Package, *ast.Package, *t
 	}
 	config := types.Config{
 		IgnoreFuncBodies: true,
-		Importer:         importer.ForCompiler(t.fset, runtime.Compiler, nil),
+		Importer:         importer.ForCompiler(t.fset, "source", nil),
 	}
 	info := &types.Info{
 		Defs: make(map[*ast.Ident]types.Object),
@@ -126,14 +125,14 @@ func (t *T) buildParseAndCheck(pkgPath string) (*build.Package, *ast.Package, *t
 }
 
 // New returns a new instance of T.
-func New(builder build.Context) *T {
+func New() *T {
 	return &T{
-		builder: builder,
 		built:   make(map[string]*build.Package),
 		parsed:  make(map[string]*ast.Package),
 		checked: make(map[string]*types.Info),
 		ifcs:    make(map[string]*types.Interface),
 		fns:     make(map[string]*types.Func),
+		impls:   make(map[string]*types.Func),
 		pos:     make(map[string]token.Position),
 		fset:    token.NewFileSet(),
 	}
@@ -145,10 +144,15 @@ func New(builder build.Context) *T {
 // package.
 func (t *T) AddInterfaces(ctx context.Context, interfaces ...string) error {
 	errs := errors.M{}
+	var wg sync.WaitGroup
+	wg.Add(len(interfaces))
 	for _, ifc := range interfaces {
-		err := t.findInterfaces(ctx, t.builder, ifc)
-		errs.Append(err)
+		go func(ifc string) {
+			errs.Append(t.findInterfaces(ctx, ifc))
+			wg.Done()
+		}(ifc)
 	}
+	wg.Wait()
 	return errs.Err()
 }
 
@@ -158,10 +162,15 @@ func (t *T) AddInterfaces(ctx context.Context, interfaces ...string) error {
 // package.
 func (t *T) AddFunctions(ctx context.Context, names ...string) error {
 	errs := errors.M{}
+	var wg sync.WaitGroup
+	wg.Add(len(names))
 	for _, name := range names {
-		err := t.findFunctions(ctx, t.builder, name)
-		errs.Append(err)
+		go func(name string) {
+			errs.Append(t.findFunctions(ctx, name))
+			wg.Done()
+		}(name)
 	}
+	wg.Wait()
 	return errs.Err()
 }
 
@@ -200,7 +209,7 @@ func isInterfaceType(typ types.Type) *types.Interface {
 	return nil
 }
 
-func (t *T) findInterfaces(ctx context.Context, builder build.Context, ifc string) error {
+func (t *T) findInterfaces(ctx context.Context, ifc string) error {
 	// TODO: ensure that this code works correctly with modules. The go/...
 	//       packages do not appear to be fully module aware yet.
 	pkgPath, ifcName := packageName(ifc)
@@ -219,28 +228,66 @@ func (t *T) findInterfaces(ctx context.Context, builder build.Context, ifc strin
 		if ifcType == nil {
 			continue
 		}
-		if all || k.Name == ifcName {
-			fqn := pkgPath + "." + k.Name
-			found++
-			t.mu.Lock()
-			t.ifcs[fqn] = ifcType
-			t.pos[fqn] = t.fset.Position(k.Pos())
-			t.mu.Unlock()
-			if !all {
-				return nil
+		if !all && k.Name != ifcName {
+			continue
+		}
+
+		if el := ifcType.NumEmbeddeds(); el > 0 {
+			// Make sure to include embedded interfaces. To do so, gather
+			// the names of the embedded interfaces and iterate over the
+			// typed checked definitions to locate them.
+			names := map[string]bool{}
+			for i := 0; i < el; i++ {
+				et := ifcType.EmbeddedType(i)
+				named, ok := et.(*types.Named)
+				if !ok {
+					continue
+				}
+				epkg := named.Obj().Pkg()
+				if epkg.Path() != pkgPath {
+					// Treat the external embedded interface as if it was
+					// directly requested.
+					t.findInterfaces(ctx, named.String())
+					continue
+				}
+				// Record the name of the locally defined embedded interfaces
+				// and then look for them in the typed checked Defs.
+				names[named.Obj().Name()] = true
 			}
+			for ek, eobj := range checked.Defs {
+				if names[ek.Name] {
+					fqn := pkgPath + "." + ek.Name
+					ifcType := isInterfaceType(eobj.Type())
+					if ifcType == nil {
+						continue
+					}
+					t.mu.Lock()
+					t.ifcs[fqn] = ifcType
+					t.pos[fqn] = t.fset.Position(ek.Pos())
+					t.mu.Unlock()
+				}
+			}
+		}
+		fqn := pkgPath + "." + k.Name
+		found++
+		t.mu.Lock()
+		t.ifcs[fqn] = ifcType
+		t.pos[fqn] = t.fset.Position(k.Pos())
+		t.mu.Unlock()
+		if !all {
+			return nil
 		}
 	}
 	if all {
 		if found == 0 {
-			fmt.Errorf("failed to find any exported interfaces in %v", pkgPath)
+			return fmt.Errorf("failed to find any exported interfaces in %v", pkgPath)
 		}
 		return nil
 	}
 	return fmt.Errorf("failed to find exported interface %v", ifc)
 }
 
-func (t *T) findFunctions(ctx context.Context, builder build.Context, fn string) error {
+func (t *T) findFunctions(ctx context.Context, fn string) error {
 	// TODO: ensure that this code works correctly with modules. The go/...
 	//       packages do not appear to be fully module aware yet.
 	pkgPath, fnName := packageName(fn)
@@ -250,7 +297,6 @@ func (t *T) findFunctions(ctx context.Context, builder build.Context, fn string)
 	}
 	all := fnName == "*"
 	found := 0
-	// Look in info.Defs for defined interfaces.
 	// Look in info.Defs for functions.
 	for k, obj := range checked.Defs {
 		if obj == nil || !k.IsExported() {
