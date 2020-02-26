@@ -58,7 +58,7 @@ func TestInterfaces(t *testing.T) {
 	if err != nil {
 		t.Fatalf("findimpl.AddInterfaces: %v", err)
 	}
-	compareLocations(t, finder.Locations(), []string{
+	compareLocations(t, finder.APILocations(), []string{
 		here + "data.Ifc1",
 		here + "data.Ifc2",
 	}, []string{
@@ -71,7 +71,7 @@ func TestInterfaces(t *testing.T) {
 	if err != nil {
 		t.Fatalf("findimpl.AddInterfaces: %v", err)
 	}
-	compareLocations(t, finder.Locations(), []string{
+	compareLocations(t, finder.APILocations(), []string{
 		here + "data.Ifc1",
 		here + "data.Ifc2",
 		here + "data.Ifc3",
@@ -91,7 +91,7 @@ func TestEmbeddedInterfaces(t *testing.T) {
 	if err != nil {
 		t.Fatalf("findimpl.AddInterfaces: %v", err)
 	}
-	compareLocations(t, finder.Locations(), []string{
+	compareLocations(t, finder.APILocations(), []string{
 		here + "data/embedded.IfcE",
 		here + "data/embedded.IfcE1",
 		here + "data/embedded.IfcE2",
@@ -121,7 +121,7 @@ func TestFunctions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("findimpl.AddFunctions: %v", err)
 	}
-	compareLocations(t, finder.Locations(), []string{
+	compareLocations(t, finder.APILocations(), []string{
 		here + "data.Fn2 func",
 	}, []string{
 		here + "data/functions.go:11:6",
@@ -133,7 +133,7 @@ func TestFunctions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("findimpl.AddFunctions: %v", err)
 	}
-	compareLocations(t, finder.Locations(), []string{
+	compareLocations(t, finder.APILocations(), []string{
 		here + "data.Fn1 func",
 		here + "data.Fn2 func",
 	}, []string{
@@ -149,15 +149,15 @@ func TestFunctionsAndInterfaces(t *testing.T) {
 	if err != nil {
 		t.Fatalf("findimpl.AddFunctions: %v", err)
 	}
-	err = finder.AddInterfaces(ctx, here+"data.Ifc3")
+	err = finder.AddInterfaces(ctx, here+"data.Ifc2")
 	if err != nil {
 		t.Fatalf("findimpl.AddInterfaces: %v", err)
 	}
-	compareLocations(t, finder.Locations(), []string{
+	compareLocations(t, finder.APILocations(), []string{
 		here + "data.Fn2 func",
-		here + "data.Ifc3 interface",
+		here + "data.Ifc2 interface",
 	}, []string{
 		here + "data/functions.go:11:6",
-		here + "data/interfaces.go:16:6",
+		here + "data/interfaces.go:12:6",
 	})
 }

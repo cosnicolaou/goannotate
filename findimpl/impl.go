@@ -23,6 +23,9 @@ func listPackages(ctx context.Context, pkgs []string) ([]string, error) {
 	lines := strings.Split(string(out), "\n")
 	dedup := map[string]bool{}
 	for _, l := range lines {
+		if len(l) == 0 {
+			continue
+		}
 		dedup[l] = true
 	}
 	list := make([]string, 0, len(dedup))
@@ -65,11 +68,22 @@ func (t *T) findInPkg(ctx context.Context, builder build.Context, pkgPath string
 		if !ok {
 			continue
 		}
-		if fn.Type().(*types.Signature).Recv() == nil {
-			// ignore functions
+		sig := fn.Type().(*types.Signature)
+		rcv := sig.Recv()
+		if rcv == nil || isInterfaceType(rcv.Type()) != nil {
+			// ignore functions and abstract methods
 			continue
 		}
-		fmt.Printf("XXX: %v -> %v: %T\n", k, obj, obj)
+		// a concrete method
+		t.mu.Lock()
+		for ifcPath, ifcType := range t.interfaces {
+			if types.Implements(rcv.Type(), ifcType) {
+				t.implementations[fn.String()] = fn
+				t.implemented[fn.String()] = append(t.implemented[fn.String()], ifcPath)
+				t.pos[fn.String()] = t.fset.Position(k.Pos())
+			}
+		}
+		t.mu.Unlock()
 	}
 	return nil
 }

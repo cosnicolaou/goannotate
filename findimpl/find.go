@@ -12,6 +12,7 @@ import (
 	"go/token"
 	"go/types"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 
@@ -31,12 +32,29 @@ type T struct {
 	fset *token.FileSet
 	mu   sync.Mutex
 	// GUARDED_BY(mu), indexed by <package-path>.<name>
-	built      map[string]*build.Package
-	parsed     map[string]*ast.Package
-	checked    map[string]*types.Info
-	ifcs       map[string]*types.Interface
-	fns, impls map[string]*types.Func
-	pos        map[string]token.Position
+	built           map[string]*build.Package
+	parsed          map[string]*ast.Package
+	checked         map[string]*types.Info
+	interfaces      map[string]*types.Interface
+	implemented     map[string][]string
+	functions       map[string]*types.Func
+	implementations map[string]*types.Func
+	pos             map[string]token.Position
+}
+
+// New returns a new instance of T.
+func New() *T {
+	return &T{
+		built:           make(map[string]*build.Package),
+		parsed:          make(map[string]*ast.Package),
+		checked:         make(map[string]*types.Info),
+		interfaces:      make(map[string]*types.Interface),
+		functions:       make(map[string]*types.Func),
+		implementations: make(map[string]*types.Func),
+		implemented:     make(map[string][]string),
+		pos:             make(map[string]token.Position),
+		fset:            token.NewFileSet(),
+	}
 }
 
 func (t *T) build(pkgPath string) (*build.Package, error) {
@@ -124,20 +142,6 @@ func (t *T) buildParseAndCheck(pkgPath string) (*build.Package, *ast.Package, *t
 	return built, parsed, info, nil
 }
 
-// New returns a new instance of T.
-func New() *T {
-	return &T{
-		built:   make(map[string]*build.Package),
-		parsed:  make(map[string]*ast.Package),
-		checked: make(map[string]*types.Info),
-		ifcs:    make(map[string]*types.Interface),
-		fns:     make(map[string]*types.Func),
-		impls:   make(map[string]*types.Func),
-		pos:     make(map[string]token.Position),
-		fset:    token.NewFileSet(),
-	}
-}
-
 // AddInterfaces adds interfaces representing an 'API" to the finder.
 // The interface name must be either a fully qualified type name as
 // <package>.<interface> or <package>.* to include all interfaces in the
@@ -174,20 +178,48 @@ func (t *T) AddFunctions(ctx context.Context, names ...string) error {
 	return errs.Err()
 }
 
-// Locations will display the location of each interface that represents an API.
-func (t *T) Locations() string {
+// APILocations returns the location of each interface and function that represents an API.
+func (t *T) APILocations() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	out := strings.Builder{}
-	for k := range t.ifcs {
+	for k := range t.interfaces {
 		pos := t.pos[k]
 		out.WriteString(k)
 		out.WriteString(" interface ")
 		out.WriteString(pos.String())
 		out.WriteString("\n")
 	}
-	for k := range t.fns {
+	for k := range t.functions {
 		pos := t.pos[k]
 		out.WriteString(k)
 		out.WriteString(" func ")
+		out.WriteString(pos.String())
+		out.WriteString("\n")
+	}
+	return out.String()
+}
+
+// AnnotationLocations returns the location of each function or method that would
+// be annotated.
+func (t *T) AnnotationLocations() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	out := strings.Builder{}
+	for k := range t.implementations {
+		pos := t.pos[k]
+		out.WriteString(k)
+		out.WriteString(" implements interface ")
+		sort.Strings(t.implemented[k])
+		out.WriteString(strings.Join(t.implemented[k], ", "))
+		out.WriteString(" at ")
+		out.WriteString(pos.String())
+		out.WriteString("\n")
+	}
+	for k := range t.functions {
+		pos := t.pos[k]
+		out.WriteString(k)
+		out.WriteString(" API func ")
 		out.WriteString(pos.String())
 		out.WriteString("\n")
 	}
@@ -262,7 +294,7 @@ func (t *T) findInterfaces(ctx context.Context, ifc string) error {
 						continue
 					}
 					t.mu.Lock()
-					t.ifcs[fqn] = ifcType
+					t.interfaces[fqn] = ifcType
 					t.pos[fqn] = t.fset.Position(ek.Pos())
 					t.mu.Unlock()
 				}
@@ -271,7 +303,7 @@ func (t *T) findInterfaces(ctx context.Context, ifc string) error {
 		fqn := pkgPath + "." + k.Name
 		found++
 		t.mu.Lock()
-		t.ifcs[fqn] = ifcType
+		t.interfaces[fqn] = ifcType
 		t.pos[fqn] = t.fset.Position(k.Pos())
 		t.mu.Unlock()
 		if !all {
@@ -314,7 +346,7 @@ func (t *T) findFunctions(ctx context.Context, fn string) error {
 			fqn := pkgPath + "." + k.Name
 			found++
 			t.mu.Lock()
-			t.fns[fqn] = fn
+			t.functions[fqn] = fn
 			t.pos[fqn] = t.fset.Position(k.Pos())
 			t.mu.Unlock()
 			if !all {
