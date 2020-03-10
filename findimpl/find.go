@@ -16,7 +16,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/cosnicolaou/errors"
+	"cloudeng.io/sync/errgroup"
 )
 
 func packageName(typ string) (string, string) {
@@ -147,17 +147,14 @@ func (t *T) buildParseAndCheck(pkgPath string) (*build.Package, *ast.Package, *t
 // <package>.<interface> or <package>.* to include all interfaces in the
 // package.
 func (t *T) AddInterfaces(ctx context.Context, interfaces ...string) error {
-	errs := errors.M{}
-	var wg sync.WaitGroup
-	wg.Add(len(interfaces))
+	group, ctx := errgroup.WithContext(ctx)
 	for _, ifc := range interfaces {
-		go func(ifc string) {
-			errs.Append(t.findInterfaces(ctx, ifc))
-			wg.Done()
-		}(ifc)
+		ifc := ifc
+		group.Go(func() error {
+			return t.findInterfaces(ctx, ifc)
+		})
 	}
-	wg.Wait()
-	return errs.Err()
+	return group.Wait()
 }
 
 // AddFunctions adds functions representing an 'API' to the finder.
@@ -165,17 +162,14 @@ func (t *T) AddInterfaces(ctx context.Context, interfaces ...string) error {
 // <package>.<function> or <package>.* to include all exported functions in the
 // package.
 func (t *T) AddFunctions(ctx context.Context, names ...string) error {
-	errs := errors.M{}
-	var wg sync.WaitGroup
-	wg.Add(len(names))
+	group, ctx := errgroup.WithContext(ctx)
 	for _, name := range names {
-		go func(name string) {
-			errs.Append(t.findFunctions(ctx, name))
-			wg.Done()
-		}(name)
+		name := name
+		group.Go(func() error {
+			return t.findFunctions(ctx, name)
+		})
 	}
-	wg.Wait()
-	return errs.Err()
+	return group.Wait()
 }
 
 // APILocations returns the location of each interface and function that represents an API.

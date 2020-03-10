@@ -8,9 +8,8 @@ import (
 	"os/exec"
 	"sort"
 	"strings"
-	"sync"
 
-	"github.com/cosnicolaou/errors"
+	"cloudeng.io/sync/errgroup"
 )
 
 func listPackages(ctx context.Context, pkgs []string) ([]string, error) {
@@ -41,17 +40,14 @@ func (t *T) FindInPkgs(ctx context.Context, builder build.Context, packages ...s
 	if err != nil {
 		return fmt.Errorf("failed to list packages: %w", err)
 	}
-	errs := errors.M{}
-	var wg sync.WaitGroup
-	wg.Add(len(pkgs))
+	group, ctx := errgroup.WithContext(ctx)
 	for _, pkg := range pkgs {
-		go func(pkg string) {
-			errs.Append(t.findInPkg(ctx, builder, pkg))
-			wg.Done()
-		}(pkg)
+		pkg := pkg
+		group.Go(func() error {
+			return t.findInPkg(ctx, builder, pkg)
+		})
 	}
-	wg.Wait()
-	return errs.Err()
+	return group.Wait()
 }
 
 func (t *T) findInPkg(ctx context.Context, builder build.Context, pkgPath string) error {
