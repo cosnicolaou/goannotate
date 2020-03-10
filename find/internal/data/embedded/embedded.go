@@ -1,6 +1,6 @@
 package embedded
 
-import "github.com/cosnicolaou/goannotate/findimpl/internal/data/embedded/pkg"
+import "github.com/cosnicolaou/goannotate/find/internal/data/embedded/pkg"
 
 type IfcE1 interface {
 	E1()

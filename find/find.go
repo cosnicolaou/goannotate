@@ -1,6 +1,6 @@
-// Package findimpl provides a means of searching go code for implementations
+// Package find provides a means of searching go code for implementations
 // of specified go interfaces.
-package findimpl
+package find
 
 import (
 	"context"

@@ -1,4 +1,4 @@
-package findimpl_test
+package find_test
 
 import (
 	"context"
@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cosnicolaou/goannotate/findimpl"
+	"github.com/cosnicolaou/goannotate/find"
 )
 
 func implements(ifcs ...string) string {
@@ -23,17 +23,17 @@ func implements(ifcs ...string) string {
 }
 func TestImpl(t *testing.T) {
 	ctx := context.Background()
-	here := "github.com/cosnicolaou/goannotate/findimpl/internal/"
-	finder := findimpl.New()
+	here := "github.com/cosnicolaou/goannotate/find/internal/"
+	finder := find.New()
 	err := finder.AddInterfaces(ctx,
 		here+"data.*",
 	)
 	if err != nil {
-		t.Fatalf("findimpl.AddInterfaces: %v", err)
+		t.Fatalf("find.AddInterfaces: %v", err)
 	}
 	err = finder.FindInPkgs(ctx, build.Default, here+"...")
 	if err != nil {
-		t.Fatalf("findimpl.FindInPkgs: %v", err)
+		t.Fatalf("find.FindInPkgs: %v", err)
 	}
 
 	compareLocations(t, finder.AnnotationLocations(), []string{

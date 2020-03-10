@@ -1,4 +1,4 @@
-package findimpl
+package find
 
 import (
 	"context"

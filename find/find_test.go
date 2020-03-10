@@ -1,4 +1,4 @@
-package findimpl_test
+package find_test
 
 import (
 	"context"
@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cosnicolaou/goannotate/findimpl"
+	"github.com/cosnicolaou/goannotate/find"
 )
 
 func compareLocations(t *testing.T, value string, prefixes, suffixes []string) {
@@ -39,11 +39,11 @@ func compareLocations(t *testing.T, value string, prefixes, suffixes []string) {
 	}
 }
 
-const here = "github.com/cosnicolaou/goannotate/findimpl/internal/"
+const here = "github.com/cosnicolaou/goannotate/find/internal/"
 
 func TestInterfaces(t *testing.T) {
 	ctx := context.Background()
-	finder := findimpl.New()
+	finder := find.New()
 	err := finder.AddInterfaces(ctx,
 		here+"data.xxxx",
 		here+"data.Ifc2",
@@ -56,7 +56,7 @@ func TestInterfaces(t *testing.T) {
 		here+"data.Ifc2",
 	)
 	if err != nil {
-		t.Fatalf("findimpl.AddInterfaces: %v", err)
+		t.Fatalf("find.AddInterfaces: %v", err)
 	}
 	compareLocations(t, finder.APILocations(), []string{
 		here + "data.Ifc1",
@@ -69,7 +69,7 @@ func TestInterfaces(t *testing.T) {
 		here+"data.*",
 	)
 	if err != nil {
-		t.Fatalf("findimpl.AddInterfaces: %v", err)
+		t.Fatalf("find.AddInterfaces: %v", err)
 	}
 	compareLocations(t, finder.APILocations(), []string{
 		here + "data.Ifc1",
@@ -84,12 +84,12 @@ func TestInterfaces(t *testing.T) {
 
 func TestEmbeddedInterfaces(t *testing.T) {
 	ctx := context.Background()
-	finder := findimpl.New()
+	finder := find.New()
 	err := finder.AddInterfaces(ctx,
 		here+"data/embedded.IfcE",
 	)
 	if err != nil {
-		t.Fatalf("findimpl.AddInterfaces: %v", err)
+		t.Fatalf("find.AddInterfaces: %v", err)
 	}
 	compareLocations(t, finder.APILocations(), []string{
 		here + "data/embedded.IfcE",
@@ -108,7 +108,7 @@ func TestEmbeddedInterfaces(t *testing.T) {
 
 func TestFunctions(t *testing.T) {
 	ctx := context.Background()
-	finder := findimpl.New()
+	finder := find.New()
 
 	err := finder.AddFunctions(ctx, here+"data", "notthere")
 	if err == nil {
@@ -119,7 +119,7 @@ func TestFunctions(t *testing.T) {
 		here+"data.Fn2",
 	)
 	if err != nil {
-		t.Fatalf("findimpl.AddFunctions: %v", err)
+		t.Fatalf("find.AddFunctions: %v", err)
 	}
 	compareLocations(t, finder.APILocations(), []string{
 		here + "data.Fn2 func",
@@ -131,7 +131,7 @@ func TestFunctions(t *testing.T) {
 		here+"data.*",
 	)
 	if err != nil {
-		t.Fatalf("findimpl.AddFunctions: %v", err)
+		t.Fatalf("find.AddFunctions: %v", err)
 	}
 	compareLocations(t, finder.APILocations(), []string{
 		here + "data.Fn1 func",
@@ -144,14 +144,14 @@ func TestFunctions(t *testing.T) {
 
 func TestFunctionsAndInterfaces(t *testing.T) {
 	ctx := context.Background()
-	finder := findimpl.New()
+	finder := find.New()
 	err := finder.AddFunctions(ctx, here+"data.Fn2")
 	if err != nil {
-		t.Fatalf("findimpl.AddFunctions: %v", err)
+		t.Fatalf("find.AddFunctions: %v", err)
 	}
 	err = finder.AddInterfaces(ctx, here+"data.Ifc2")
 	if err != nil {
-		t.Fatalf("findimpl.AddInterfaces: %v", err)
+		t.Fatalf("find.AddInterfaces: %v", err)
 	}
 	compareLocations(t, finder.APILocations(), []string{
 		here + "data.Fn2 func",
