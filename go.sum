@@ -2,6 +2,8 @@ cloudeng.io v0.0.0-20200307051409-0c3c9076d3c7 h1:Y+3FCEviT2tejc/RbJ+Kj2v5O30U+a
 cloudeng.io/errors v0.0.0-20200306051138-cf9454181635/go.mod h1:4iZnGEBj5F3SqTHZF6AHiFMgeHeJWJJkVHx/UwbDYok=
 cloudeng.io/errors v0.0.2 h1:557CLQCWDOCzwuS2L7P+KLBqD1ZgWnDh+Pk4sX5uQv0=
 cloudeng.io/errors v0.0.2/go.mod h1:4iZnGEBj5F3SqTHZF6AHiFMgeHeJWJJkVHx/UwbDYok=
+cloudeng.io/errors v0.0.4 h1:p88RU0KV9TkGyFg8iGcUKzkMArlfPMMSE+kGysqKuhw=
+cloudeng.io/errors v0.0.4/go.mod h1:4iZnGEBj5F3SqTHZF6AHiFMgeHeJWJJkVHx/UwbDYok=
 cloudeng.io/sync v0.0.2 h1:c4DG8q7JsLa9EtdIPd4adthHa4cu3Vhx9nwJL7dgtsE=
 cloudeng.io/sync v0.0.2/go.mod h1:yBx//aJ0Fzaa6nQjj8Z6aaOGUP52iG7SQHwi2gONvrs=
 github.com/cosnicolaou/errors v0.0.0-20200224014318-0877a498626d h1:kea78QgX1+tsuTmNtSoFYtrtI1LMvmVENFxmEUh8eiM=

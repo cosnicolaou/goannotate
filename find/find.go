@@ -1,5 +1,5 @@
 // Package find provides a means of searching go code for implementations
-// of specified go interfaces.
+// of specified go interfaces and functions.
 package find
 
 import (
@@ -12,6 +12,8 @@ import (
 	"go/token"
 	"go/types"
 	"os"
+	"path"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -19,12 +21,30 @@ import (
 	"cloudeng.io/sync/errgroup"
 )
 
-func packageName(typ string) (string, string) {
-	sep := strings.LastIndex(typ, ".")
-	if sep < 0 {
-		return "", typ
+func packageName(typ string) (pkgPath string, re *regexp.Regexp, err error) {
+	compile := func(expr string) (*regexp.Regexp, error) {
+		re, err = regexp.Compile(expr)
+		if err != nil {
+			return nil, fmt.Errorf("failed to compile regexp: %q: %w", expr, err)
+		}
+		return re, nil
 	}
-	return typ[:sep], typ[sep+1:]
+	idx := strings.LastIndex(typ, "/")
+	if idx < 0 {
+		re, err = compile(typ)
+		return
+	}
+	dir := typ[:idx]
+	tail := typ[idx+1:]
+	idx = strings.Index(tail, ".")
+	if idx < 0 {
+		pkgPath = path.Join(dir, tail)
+		re, err = compile(".*")
+		return
+	}
+	pkgPath = path.Join(dir, tail[:idx])
+	re, err = compile(tail[idx+1:])
+	return
 }
 
 // T represents an implementation finder.
@@ -89,8 +109,7 @@ func (t *T) buildAndParse(pkgPath string) (*build.Package, *ast.Package, error) 
 	ignoreTestFiles := func(info os.FileInfo) bool {
 		return !strings.HasSuffix(info.Name(), "_test.go")
 	}
-	// we only care about the single package in each package directory,
-	// ignoring test packages etc.
+	// Only parse the main package and ignore the test package if present.
 	multi, err := parser.ParseDir(t.fset, built.Dir, ignoreTestFiles, 0)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to parse dir %v: %w", built.Dir, err)
@@ -123,7 +142,7 @@ func (t *T) buildParseAndCheck(pkgPath string) (*build.Package, *ast.Package, *t
 		return built, parsed, checked, nil
 	}
 	config := types.Config{
-		IgnoreFuncBodies: true,
+		IgnoreFuncBodies: false,
 		Importer:         importer.ForCompiler(t.fset, "source", nil),
 	}
 	info := &types.Info{
@@ -133,8 +152,12 @@ func (t *T) buildParseAndCheck(pkgPath string) (*build.Package, *ast.Package, *t
 	for _, p := range parsed.Files {
 		files = append(files, p)
 	}
-	if _, err := config.Check(pkgPath, t.fset, files, info); err != nil {
+	pkg, err := config.Check(pkgPath, t.fset, files, info)
+	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to typecheck %v: %w", pkgPath, err)
+	}
+	if !pkg.Complete() {
+		return nil, nil, nil, fmt.Errorf("incomplete package %v", pkgPath)
 	}
 	t.mu.Lock()
 	t.checked[pkgPath] = info
@@ -143,30 +166,45 @@ func (t *T) buildParseAndCheck(pkgPath string) (*build.Package, *ast.Package, *t
 }
 
 // AddInterfaces adds interfaces representing an 'API" to the finder.
-// The interface name must be either a fully qualified type name as
-// <package>.<interface> or <package>.* to include all interfaces in the
-// package.
+// The interface names are specified as fully qualified type names with a
+// regular expression being accepted for the package local component.
+// For example, all of the following match all interfaces in
+// acme.com/a/b:
+//   acme.com/a/b
+//   acme.com/a/b.
+//   acme.com/a/b..*
+// Note that the . separator in the type name is not used as part of the
+// regular expression. The following will match a subset of the
+// interfaces:
+//   acme.com/a/b.prefix
+//   acme.com/a/b.thisInterface$
 func (t *T) AddInterfaces(ctx context.Context, interfaces ...string) error {
 	group, ctx := errgroup.WithContext(ctx)
 	for _, ifc := range interfaces {
-		ifc := ifc
+		pkgPath, ifcRE, err := packageName(ifc)
+		if err != nil {
+			return err
+		}
 		group.Go(func() error {
-			return t.findInterfaces(ctx, ifc)
+			return t.findInterfaces(ctx, pkgPath, ifcRE)
 		})
 	}
 	return group.Wait()
 }
 
 // AddFunctions adds functions representing an 'API' to the finder.
-// The function name must be either a fully qualified type name as
-// <package>.<function> or <package>.* to include all exported functions in the
-// package.
+// The function names are specified as fully qualified names with a
+// regular expression being accepted for the package local component as per
+// AddInterfaces.
 func (t *T) AddFunctions(ctx context.Context, names ...string) error {
 	group, ctx := errgroup.WithContext(ctx)
 	for _, name := range names {
-		name := name
+		pkgPath, nameRE, err := packageName(name)
+		if err != nil {
+			return err
+		}
 		group.Go(func() error {
-			return t.findFunctions(ctx, name)
+			return t.findFunctions(ctx, pkgPath, nameRE)
 		})
 	}
 	return group.Wait()
@@ -197,26 +235,20 @@ func (t *T) APILocations() string {
 // AnnotationLocations returns the location of each function or method that would
 // be annotated.
 func (t *T) AnnotationLocations() string {
-	t.mu.Lock()
-	defer t.mu.Unlock()
 	out := strings.Builder{}
-	for k := range t.implementations {
-		pos := t.pos[k]
-		out.WriteString(k)
-		out.WriteString(" implements interface ")
-		sort.Strings(t.implemented[k])
-		out.WriteString(strings.Join(t.implemented[k], ", "))
-		out.WriteString(" at ")
+	t.WalkAnnotations(func(pos token.Position, name string, info *types.Info, fn *types.Func, implemented []string) {
+		out.WriteString(name)
+		if len(implemented) > 0 {
+			out.WriteString(" implements ")
+			sort.Strings(implemented)
+			out.WriteString(strings.Join(implemented, ", "))
+			out.WriteString(" at ")
+		} else {
+			out.WriteString(" func ")
+		}
 		out.WriteString(pos.String())
 		out.WriteString("\n")
-	}
-	for k := range t.functions {
-		pos := t.pos[k]
-		out.WriteString(k)
-		out.WriteString(" API func ")
-		out.WriteString(pos.String())
-		out.WriteString("\n")
-	}
+	})
 	return out.String()
 }
 
@@ -235,29 +267,23 @@ func isInterfaceType(typ types.Type) *types.Interface {
 	return nil
 }
 
-func (t *T) findInterfaces(ctx context.Context, ifc string) error {
+func (t *T) findInterfaces(ctx context.Context, pkgPath string, ifcRE *regexp.Regexp) error {
 	// TODO: ensure that this code works correctly with modules. The go/...
 	//       packages do not appear to be fully module aware yet.
-	pkgPath, ifcName := packageName(ifc)
 	_, _, checked, err := t.buildParseAndCheck(pkgPath)
 	if err != nil {
 		return err
 	}
-	all := ifcName == "*"
 	found := 0
 	// Look in info.Defs for defined interfaces.
 	for k, obj := range checked.Defs {
-		if obj == nil || !k.IsExported() {
+		if obj == nil || !k.IsExported() || !ifcRE.MatchString(k.Name) {
 			continue
 		}
 		ifcType := isInterfaceType(obj.Type())
 		if ifcType == nil {
 			continue
 		}
-		if !all && k.Name != ifcName {
-			continue
-		}
-
 		if el := ifcType.NumEmbeddeds(); el > 0 {
 			// Make sure to include embedded interfaces. To do so, gather
 			// the names of the embedded interfaces and iterate over the
@@ -269,11 +295,13 @@ func (t *T) findInterfaces(ctx context.Context, ifc string) error {
 				if !ok {
 					continue
 				}
-				epkg := named.Obj().Pkg()
-				if epkg.Path() != pkgPath {
+				obj := named.Obj()
+				epkg := obj.Pkg()
+				if epath := epkg.Path(); epath != pkgPath {
 					// Treat the external embedded interface as if it was
 					// directly requested.
-					t.findInterfaces(ctx, named.String())
+					re, _ := regexp.Compile(obj.Name() + "$")
+					t.findInterfaces(ctx, epath, re)
 					continue
 				}
 				// Record the name of the locally defined embedded interfaces
@@ -300,32 +328,25 @@ func (t *T) findInterfaces(ctx context.Context, ifc string) error {
 		t.interfaces[fqn] = ifcType
 		t.pos[fqn] = t.fset.Position(k.Pos())
 		t.mu.Unlock()
-		if !all {
-			return nil
-		}
+
 	}
-	if all {
-		if found == 0 {
-			return fmt.Errorf("failed to find any exported interfaces in %v", pkgPath)
-		}
-		return nil
+	if found == 0 {
+		return fmt.Errorf("failed to find any exported interfaces in %v for %s", pkgPath, ifcRE)
 	}
-	return fmt.Errorf("failed to find exported interface %v", ifc)
+	return nil
 }
 
-func (t *T) findFunctions(ctx context.Context, fn string) error {
+func (t *T) findFunctions(ctx context.Context, pkgPath string, fnRE *regexp.Regexp) error {
 	// TODO: ensure that this code works correctly with modules. The go/...
 	//       packages do not appear to be fully module aware yet.
-	pkgPath, fnName := packageName(fn)
 	_, _, checked, err := t.buildParseAndCheck(pkgPath)
 	if err != nil {
 		return err
 	}
-	all := fnName == "*"
 	found := 0
 	// Look in info.Defs for functions.
 	for k, obj := range checked.Defs {
-		if obj == nil || !k.IsExported() {
+		if obj == nil || !k.IsExported() || !fnRE.MatchString(k.Name) {
 			continue
 		}
 		fn, ok := obj.(*types.Func)
@@ -336,23 +357,65 @@ func (t *T) findFunctions(ctx context.Context, fn string) error {
 			// either a method or an abstract function.
 			continue
 		}
-		if all || k.Name == fnName {
-			fqn := pkgPath + "." + k.Name
-			found++
-			t.mu.Lock()
-			t.functions[fqn] = fn
-			t.pos[fqn] = t.fset.Position(k.Pos())
-			t.mu.Unlock()
-			if !all {
-				return nil
-			}
-		}
+		fqn := pkgPath + "." + k.Name
+		found++
+		t.mu.Lock()
+		t.functions[fqn] = fn
+		t.pos[fqn] = t.fset.Position(k.Pos())
+		t.mu.Unlock()
+
 	}
-	if all {
-		if found == 0 {
-			return fmt.Errorf("failed to find any exported functions in %v", pkgPath)
-		}
-		return nil
+	if found == 0 {
+		return fmt.Errorf("failed to find any exported functions in %v for %s", pkgPath, fnRE)
 	}
-	return fmt.Errorf("failed to find exported function %v", pkgPath)
+	return nil
+}
+
+type sortByPos struct {
+	name        string
+	pos         token.Position
+	fn          *types.Func
+	implemented []string
+}
+
+// WalkAnnotations calls the supplied function for each function that is
+// to be annotated. The annotations are orderd by their location positions,
+// that is, by filename and then position within file.
+func (t *T) WalkAnnotations(fn func(
+	pos token.Position,
+	name string,
+	info *types.Info,
+	fn *types.Func,
+	implemented []string)) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	sorted := make([]sortByPos, len(t.implementations)+len(t.functions))
+	i := 0
+	for k, v := range t.implementations {
+		sorted[i] = sortByPos{
+			name:        k,
+			pos:         t.pos[k],
+			fn:          v,
+			implemented: t.implemented[k],
+		}
+		i++
+	}
+	for k, v := range t.functions {
+		sorted[i] = sortByPos{
+			name: k,
+			pos:  t.pos[k],
+			fn:   v,
+		}
+		i++
+	}
+	sort.Slice(sorted, func(i, j int) bool {
+		if sorted[i].pos.Filename == sorted[j].pos.Filename {
+			return sorted[i].pos.Offset < sorted[j].pos.Offset
+		}
+		return sorted[i].pos.Filename < sorted[j].pos.Filename
+	})
+	for _, loc := range sorted {
+		info := t.checked[loc.fn.Pkg().Path()]
+		fn(loc.pos, loc.name, info, loc.fn, loc.implemented)
+	}
 }

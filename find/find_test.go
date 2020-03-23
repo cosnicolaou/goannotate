@@ -39,7 +39,7 @@ func compareLocations(t *testing.T, value string, prefixes, suffixes []string) {
 	}
 }
 
-const here = "github.com/cosnicolaou/goannotate/find/internal/"
+const here = "github.com/cosnicolaou/goannotate/find/testdata/"
 
 func TestInterfaces(t *testing.T) {
 	ctx := context.Background()
@@ -66,7 +66,7 @@ func TestInterfaces(t *testing.T) {
 		here + "data/interfaces.go:12:6",
 	})
 	err = finder.AddInterfaces(ctx,
-		here+"data.*",
+		here+"data",
 	)
 	if err != nil {
 		t.Fatalf("find.AddInterfaces: %v", err)
@@ -86,7 +86,7 @@ func TestEmbeddedInterfaces(t *testing.T) {
 	ctx := context.Background()
 	finder := find.New()
 	err := finder.AddInterfaces(ctx,
-		here+"data/embedded.IfcE",
+		here+"data/embedded.IfcE$",
 	)
 	if err != nil {
 		t.Fatalf("find.AddInterfaces: %v", err)
@@ -110,13 +110,13 @@ func TestFunctions(t *testing.T) {
 	ctx := context.Background()
 	finder := find.New()
 
-	err := finder.AddFunctions(ctx, here+"data", "notthere")
+	err := finder.AddFunctions(ctx, here+"data.nothere", "notthere")
 	if err == nil {
 		t.Errorf("failed to detect missing function")
 	}
 
 	err = finder.AddFunctions(ctx,
-		here+"data.Fn2",
+		here+"data.Fn2$",
 	)
 	if err != nil {
 		t.Fatalf("find.AddFunctions: %v", err)
@@ -124,11 +124,11 @@ func TestFunctions(t *testing.T) {
 	compareLocations(t, finder.APILocations(), []string{
 		here + "data.Fn2 func",
 	}, []string{
-		here + "data/functions.go:11:6",
+		here + "data/functions_more.go:3:6",
 	})
 
 	err = finder.AddFunctions(ctx,
-		here+"data.*",
+		here+"data",
 	)
 	if err != nil {
 		t.Fatalf("find.AddFunctions: %v", err)
@@ -138,18 +138,26 @@ func TestFunctions(t *testing.T) {
 		here + "data.Fn2 func",
 	}, []string{
 		here + "data/functions.go:7:6",
-		here + "data/functions.go:11:6",
+		here + "data/functions_more.go:3:6",
 	})
+	compareLocations(t, finder.AnnotationLocations(), []string{
+		here + "data.Fn1 func",
+		here + "data.Fn2 func",
+	}, []string{
+		here + "data/functions.go:7:6",
+		here + "data/functions_more.go:3:6",
+	})
+
 }
 
 func TestFunctionsAndInterfaces(t *testing.T) {
 	ctx := context.Background()
 	finder := find.New()
-	err := finder.AddFunctions(ctx, here+"data.Fn2")
+	err := finder.AddFunctions(ctx, here+"data.Fn2$")
 	if err != nil {
 		t.Fatalf("find.AddFunctions: %v", err)
 	}
-	err = finder.AddInterfaces(ctx, here+"data.Ifc2")
+	err = finder.AddInterfaces(ctx, here+"data.Ifc2$")
 	if err != nil {
 		t.Fatalf("find.AddInterfaces: %v", err)
 	}
@@ -157,7 +165,30 @@ func TestFunctionsAndInterfaces(t *testing.T) {
 		here + "data.Fn2 func",
 		here + "data.Ifc2 interface",
 	}, []string{
-		here + "data/functions.go:11:6",
+		here + "data/functions_more.go:3:6",
 		here + "data/interfaces.go:12:6",
 	})
+}
+
+func TestMultiPackageError(t *testing.T) {
+	ctx := context.Background()
+	finder := find.New()
+	err := finder.AddInterfaces(ctx, here+"multipackage")
+	if err == nil || !strings.Contains(err.Error(), "contains more than one package:") {
+		t.Fatalf("expected a specific error, but got: %v", err)
+	}
+	err = finder.AddInterfaces(ctx, here+"parseerror")
+	if err == nil || !strings.Contains(err.Error(), "failed to parse dir") {
+		t.Fatalf("expected a specific error, but got: %v", err)
+	}
+
+	err = finder.AddInterfaces(ctx, here+"typeerror")
+	if err == nil || !strings.Contains(err.Error(), "failed to typecheck") {
+		t.Fatalf("expected a specific error, but got: %v", err)
+	}
+
+	err = finder.AddInterfaces(ctx, here+"multipackage.(")
+	if err == nil || !strings.Contains(err.Error(), "failed to compile regexp") {
+		t.Fatalf("expected a specific error, but got: %v", err)
+	}
 }

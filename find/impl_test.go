@@ -23,26 +23,25 @@ func implements(ifcs ...string) string {
 }
 func TestImpl(t *testing.T) {
 	ctx := context.Background()
-	here := "github.com/cosnicolaou/goannotate/find/internal/"
 	finder := find.New()
 	err := finder.AddInterfaces(ctx,
-		here+"data.*",
+		here+"data",
 	)
 	if err != nil {
 		t.Fatalf("find.AddInterfaces: %v", err)
 	}
-	err = finder.FindInPkgs(ctx, build.Default, here+"...")
+	err = finder.FindInPkgs(ctx, build.Default, here+"data", here+"impl")
 	if err != nil {
 		t.Fatalf("find.FindInPkgs: %v", err)
 	}
 
 	compareLocations(t, finder.AnnotationLocations(), []string{
-		"func (*" + here + "impl.Impl1).M1() implements interface " + implements("Ifc1"),
-		"func (*" + here + "impl.Impl1).M2(string) implements interface " + implements("Ifc1"),
-		"func (*" + here + "impl.Impl12).M1() implements interface " + implements("Ifc1", "Ifc2", "Ifc3"),
-		"func (*" + here + "impl.Impl12).M2(string) implements interface " + implements("Ifc1", "Ifc2", "Ifc3"),
-		"func (*" + here + "impl.Impl12).M3(int) error implements interface " + implements("Ifc1", "Ifc2", "Ifc3"),
-		"func (*" + here + "impl.impl2).M3(int) error implements interface " + implements("Ifc2"),
+		"func (*" + here + "impl.Impl1).M1() implements " + implements("Ifc1"),
+		"func (*" + here + "impl.Impl1).M2(string) implements " + implements("Ifc1"),
+		"func (*" + here + "impl.Impl12).M1() implements " + implements("Ifc1", "Ifc2", "Ifc3"),
+		"func (*" + here + "impl.Impl12).M2(string) implements " + implements("Ifc1", "Ifc2", "Ifc3"),
+		"func (*" + here + "impl.Impl12).M3(int) error implements " + implements("Ifc1", "Ifc2", "Ifc3"),
+		"func (*" + here + "impl.impl2).M3(int) error implements " + implements("Ifc2"),
 	}, []string{
 		here + "impl/impls.go:5:17",
 		here + "impl/impls.go:9:17",
