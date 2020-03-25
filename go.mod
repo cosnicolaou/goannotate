@@ -5,5 +5,5 @@ go 1.13
 require (
 	cloudeng.io/errors v0.0.4
 	cloudeng.io/sync v0.0.2
-	github.com/cosnicolaou/errors v0.0.0-20200224014318-0877a498626d
 )
+replace  cloudeng.io/errors => /Users/cnicolaou/Dropbox/github.com/cloudengio/go.pkgs/errors

@@ -1,13 +1,8 @@
-cloudeng.io v0.0.0-20200307051409-0c3c9076d3c7 h1:Y+3FCEviT2tejc/RbJ+Kj2v5O30U+aTTv2ZnCehWaWY=
 cloudeng.io/errors v0.0.0-20200306051138-cf9454181635/go.mod h1:4iZnGEBj5F3SqTHZF6AHiFMgeHeJWJJkVHx/UwbDYok=
-cloudeng.io/errors v0.0.2 h1:557CLQCWDOCzwuS2L7P+KLBqD1ZgWnDh+Pk4sX5uQv0=
-cloudeng.io/errors v0.0.2/go.mod h1:4iZnGEBj5F3SqTHZF6AHiFMgeHeJWJJkVHx/UwbDYok=
 cloudeng.io/errors v0.0.4 h1:p88RU0KV9TkGyFg8iGcUKzkMArlfPMMSE+kGysqKuhw=
 cloudeng.io/errors v0.0.4/go.mod h1:4iZnGEBj5F3SqTHZF6AHiFMgeHeJWJJkVHx/UwbDYok=
 cloudeng.io/sync v0.0.2 h1:c4DG8q7JsLa9EtdIPd4adthHa4cu3Vhx9nwJL7dgtsE=
 cloudeng.io/sync v0.0.2/go.mod h1:yBx//aJ0Fzaa6nQjj8Z6aaOGUP52iG7SQHwi2gONvrs=
-github.com/cosnicolaou/errors v0.0.0-20200224014318-0877a498626d h1:kea78QgX1+tsuTmNtSoFYtrtI1LMvmVENFxmEUh8eiM=
-github.com/cosnicolaou/errors v0.0.0-20200224014318-0877a498626d/go.mod h1:lc60TRod3cxMFvezYknpS/lfYNvBOMYuSWcqRsRnLHE=
 github.com/matthewloring/validjson v0.0.1/go.mod h1:ihpQQ5BpGhzXgu9fpZSnX7179PsxUyYFqPjhoslB7Bo=
 golang.org/x/crypto v0.0.0-20190308221718-c2843e01d9a2/go.mod h1:djNgcEr1/C05ACkg1iLfiJU5Ep61QUkGW8qpdssI0+w=
 golang.org/x/crypto v0.0.0-20191011191535-87dc89f01550/go.mod h1:yigFU9vqHzYiE8UmvKecakEJjdnWj3jj499lnFckfCI=
@@ -19,4 +14,5 @@ golang.org/x/sys v0.0.0-20190215142949-d0b11bdaac8a/go.mod h1:STP8DvDyc/dI5b8T5h
 golang.org/x/sys v0.0.0-20190412213103-97732733099d/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
 golang.org/x/text v0.3.0/go.mod h1:NqM8EUOU14njkJ3fqMW+pc6Ldnwhi/IjpwHt7yyuwOQ=
 golang.org/x/tools v0.0.0-20200124220429-8fe064f891f2/go.mod h1:TB2adYChydJhpapKDTa4BR/hXlZSLoq2Wpct/0txZ28=
+golang.org/x/xerrors v0.0.0-20191011141410-1b5146add898 h1:/atklqdjdhuosWIl6AIbOeHJjicWYPqR9bpxqxYG2pA=
 golang.org/x/xerrors v0.0.0-20191011141410-1b5146add898/go.mod h1:I/5z698sn9Ka8TeJc9MKroUUfqBBauWjQqLJ2OPfmY0=
