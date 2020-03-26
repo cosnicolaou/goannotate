@@ -6,6 +6,11 @@ import (
 	"strings"
 )
 
+var (
+	// ContextType is type detected by HasContext.
+	ContextType = "context.Context"
+)
+
 func names(ids []*ast.Ident) []string {
 	r := make([]string, len(ids))
 	for _, id := range ids {
@@ -159,7 +164,7 @@ func HasContext(signature *types.Signature) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	if t == "context.Context" {
+	if t == ContextType {
 		return v, true
 	}
 	return "", false

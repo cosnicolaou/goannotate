@@ -53,7 +53,7 @@ func (t *T) Do(ctx context.Context, builder build.Context, packages ...string) e
 }
 
 func (t *T) findInPkg(ctx context.Context, builder build.Context, pkgPath string) error {
-	_, pkg, checked, err := t.buildParseAndCheck(pkgPath)
+	checked, err := t.buildParseAndCheck(pkgPath)
 	if err != nil {
 		return err
 	}
@@ -76,11 +76,7 @@ func (t *T) findInPkg(ctx context.Context, builder build.Context, pkgPath string
 		t.mu.Lock()
 		for ifcPath, ifcType := range t.interfaces {
 			if types.Implements(rcv.Type(), ifcType) {
-				fqn := fn.Pkg().Path() + "." + fn.Name()
-				t.implementations[fqn] = fn
-				t.implemented[fn.String()] = append(t.implemented[fn.String()], ifcPath)
-				pos := t.fset.Position(k.Pos())
-				t.fnDecl[fqn] = findFuncDecl(fn.Name(), pkg.Files[pos.Filename])
+				t.addFunction(k.Pos(), fn, ifcPath)
 			}
 		}
 		t.mu.Unlock()

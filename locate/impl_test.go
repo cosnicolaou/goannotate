@@ -37,18 +37,18 @@ func TestImpl(t *testing.T) {
 	}
 
 	compareLocations(t, locator.Functions(), []string{
-		"func (*" + here + "impl.Impl1).M1() implements " + implements("Ifc1"),
-		"func (*" + here + "impl.Impl1).M2(string) implements " + implements("Ifc1"),
-		"func (*" + here + "impl.Impl12).M1() implements " + implements("Ifc1", "Ifc2", "Ifc3"),
-		"func (*" + here + "impl.Impl12).M2(string) implements " + implements("Ifc1", "Ifc2", "Ifc3"),
-		"func (*" + here + "impl.Impl12).M3(int) error implements " + implements("Ifc1", "Ifc2", "Ifc3"),
-		"func (*" + here + "impl.impl2).M3(int) error implements " + implements("Ifc2"),
+		"(*" + here + "impl.Impl1).M1 implements " + implements("Ifc1"),
+		"(*" + here + "impl.Impl1).M2 implements " + implements("Ifc1"),
+		"(*" + here + "impl.Impl12).M1 implements " + implements("Ifc1", "Ifc2", "Ifc3"),
+		"(*" + here + "impl.Impl12).M2 implements " + implements("Ifc1", "Ifc2", "Ifc3"),
+		"(*" + here + "impl.Impl12).M3 implements " + implements("Ifc1", "Ifc2", "Ifc3"),
+		"(*" + here + "impl.impl2).M3 implements " + implements("Ifc2"),
 	}, []string{
-		filepath.Join("impl", "impls.go") + ":5:17",
-		filepath.Join("impl", "impls.go") + ":9:17",
-		filepath.Join("impl", "impls.go:") + "22:18",
-		filepath.Join("impl", "impls.go:") + "26:18",
-		filepath.Join("impl", "impls.go:") + "30:18",
-		filepath.Join("impl", "impls.go:") + "15:17",
+		filepath.Join("impl", "impls.go") + ":5:1",
+		filepath.Join("impl", "impls.go") + ":9:1",
+		filepath.Join("impl", "impls.go:") + "22:1",
+		filepath.Join("impl", "impls.go:") + "26:1",
+		filepath.Join("impl", "impls.go:") + "30:1",
+		filepath.Join("impl", "impls.go:") + "15:1",
 	})
 }

@@ -15,6 +15,7 @@ import (
 	"os"
 	"path"
 	"regexp"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -56,17 +57,19 @@ type body struct {
 type T struct {
 	fset *token.FileSet
 	mu   sync.Mutex
-	// GUARDED_BY(mu), indexed by <package-path>.<name>
-	built           map[string]*build.Package
-	parsed          map[string]*ast.Package
-	interfaces      map[string]*types.Interface
-	interfaceDecl   map[string]*ast.TypeSpec
-	implemented     map[string][]string
-	functions       map[string]*types.Func
-	implementations map[string]*types.Func
-	fnDecl          map[string]*ast.FuncDecl
 	// GUARDED_BY(mu), indexed by <package-path>
+	built   map[string]*build.Package
+	parsed  map[string]*ast.Package
 	checked map[string]*types.Info
+	// GUARDED_BY(mu), indexed by <package-path>.<name>
+	interfaces    map[string]*types.Interface
+	interfaceDecl map[string]*ast.TypeSpec
+	// GUARDED_BY(mu), indexed by types.Func.FullName() which includes
+	// the receiver and hence is unique.
+	functions       map[string]*types.Func
+	fnDecl          map[string]*ast.FuncDecl
+	implementations map[string]*types.Func
+	implements      map[string][]string
 	// GUARDED_BY(mu), indexed by filename
 	files map[string]*ast.File
 	dirty map[string]bool
@@ -82,7 +85,7 @@ func New() *T {
 		interfaceDecl:   make(map[string]*ast.TypeSpec),
 		functions:       make(map[string]*types.Func),
 		implementations: make(map[string]*types.Func),
-		implemented:     make(map[string][]string),
+		implements:      make(map[string][]string),
 		fnDecl:          make(map[string]*ast.FuncDecl),
 		files:           make(map[string]*ast.File),
 		dirty:           make(map[string]bool),
@@ -143,16 +146,16 @@ func (t *T) buildAndParse(pkgPath string) (*build.Package, *ast.Package, error) 
 	return built, parsed, nil
 }
 
-func (t *T) buildParseAndCheck(pkgPath string) (*build.Package, *ast.Package, *types.Info, error) {
-	built, parsed, err := t.buildAndParse(pkgPath)
+func (t *T) buildParseAndCheck(pkgPath string) (*types.Info, error) {
+	_, parsed, err := t.buildAndParse(pkgPath)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
 	t.mu.Lock()
 	checked := t.checked[pkgPath]
 	t.mu.Unlock()
 	if checked != nil {
-		return built, parsed, checked, nil
+		return checked, nil
 	}
 	config := types.Config{
 		IgnoreFuncBodies: false,
@@ -167,10 +170,10 @@ func (t *T) buildParseAndCheck(pkgPath string) (*build.Package, *ast.Package, *t
 	}
 	pkg, err := config.Check(pkgPath, t.fset, files, info)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to typecheck %v: %w", pkgPath, err)
+		return nil, fmt.Errorf("failed to typecheck %v: %w", pkgPath, err)
 	}
 	if !pkg.Complete() {
-		return nil, nil, nil, fmt.Errorf("incomplete package %v", pkgPath)
+		return nil, fmt.Errorf("incomplete package %v", pkgPath)
 	}
 	t.mu.Lock()
 	for _, f := range files {
@@ -179,7 +182,7 @@ func (t *T) buildParseAndCheck(pkgPath string) (*build.Package, *ast.Package, *t
 	}
 	t.checked[pkgPath] = info
 	t.mu.Unlock()
-	return built, parsed, info, nil
+	return info, nil
 }
 
 // AddInterfaces adds interfaces representing an 'API" to the finder.
@@ -240,16 +243,14 @@ func (t *T) Interfaces() string {
 // Functions returns a string representation of all locations.
 func (t *T) Functions() string {
 	out := strings.Builder{}
-	t.WalkFunctions(func(name string, fset *token.FileSet, info *types.Info, fn *types.Func, decl *ast.FuncDecl, implemented []string) {
+	t.WalkFunctions(func(name string, fset *token.FileSet, info *types.Info, fn *types.Func, decl *ast.FuncDecl, implements []string) {
 		out.WriteString(name)
-		if len(implemented) > 0 {
+		if len(implements) > 0 {
 			out.WriteString(" implements ")
-			sort.Strings(implemented)
-			out.WriteString(strings.Join(implemented, ", "))
-			out.WriteString(" at ")
-		} else {
-			out.WriteString(" func ")
+			sort.Strings(implements)
+			out.WriteString(strings.Join(implements, ", "))
 		}
+		out.WriteString(" @ ")
 		out.WriteString(fset.Position(decl.Type.Func).String())
 		out.WriteString("\n")
 	})
@@ -284,7 +285,7 @@ func isInterfaceType(typ types.Type) *types.Interface {
 	return nil
 }
 
-func (t *T) addInterface(pos token.Pos, pkg, name string, ifcType *types.Interface) {
+func (t *T) addInterfaceLocked(pos token.Pos, pkg, name string, ifcType *types.Interface) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	fqn := pkg + "." + name
@@ -297,7 +298,7 @@ func (t *T) addInterface(pos token.Pos, pkg, name string, ifcType *types.Interfa
 func (t *T) findInterfaces(ctx context.Context, pkgPath string, ifcRE *regexp.Regexp) error {
 	// TODO: ensure that this code works correctly with modules. The go/...
 	//       packages do not appear to be fully module aware yet.
-	_, _, checked, err := t.buildParseAndCheck(pkgPath)
+	checked, err := t.buildParseAndCheck(pkgPath)
 	if err != nil {
 		return err
 	}
@@ -343,12 +344,12 @@ func (t *T) findInterfaces(ctx context.Context, pkgPath string, ifcRE *regexp.Re
 					if ifcType == nil {
 						continue
 					}
-					t.addInterface(ek.Pos(), pkgPath, ek.Name, ifcType)
+					t.addInterfaceLocked(ek.Pos(), pkgPath, ek.Name, ifcType)
 				}
 			}
 		}
 		found++
-		t.addInterface(k.Pos(), pkgPath, k.Name, ifcType)
+		t.addInterfaceLocked(k.Pos(), pkgPath, k.Name, ifcType)
 
 	}
 	if found == 0 {
@@ -357,10 +358,33 @@ func (t *T) findInterfaces(ctx context.Context, pkgPath string, ifcRE *regexp.Re
 	return nil
 }
 
+func (t *T) addFunctionLocked(pos token.Pos, fnType *types.Func, implementsIfc string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.addFunction(pos, fnType, implementsIfc)
+}
+
+func (t *T) addFunction(pos token.Pos, fnType *types.Func, implementsIfc string) {
+	filename := t.fset.File(pos).Name()
+	file := t.files[filename]
+	if file == nil {
+		fmt.Fprintf(os.Stderr, "%v: %v -> nil: %v files\n", filename, pos, len(t.files))
+	}
+	fqn := fnType.FullName()
+	if len(implementsIfc) > 0 {
+		t.implements[fqn] = append(t.implements[fqn], implementsIfc)
+		t.implementations[fqn] = fnType
+	} else {
+		t.functions[fqn] = fnType
+	}
+	t.fnDecl[fqn] = findFuncOrMethodDecl(fnType, file)
+	t.dirty[filename] = true
+}
+
 func (t *T) findFunctions(ctx context.Context, pkgPath string, fnRE *regexp.Regexp) error {
 	// TODO: ensure that this code works correctly with modules. The go/...
 	//       packages do not appear to be fully module aware yet.
-	_, pkg, checked, err := t.buildParseAndCheck(pkgPath)
+	checked, err := t.buildParseAndCheck(pkgPath)
 	if err != nil {
 		return err
 	}
@@ -378,14 +402,8 @@ func (t *T) findFunctions(ctx context.Context, pkgPath string, fnRE *regexp.Rege
 			// either a method or an abstract function.
 			continue
 		}
-		fqn := pkgPath + "." + k.Name
 		found++
-		t.mu.Lock()
-		t.functions[fqn] = fn
-		pos := t.fset.Position(k.Pos())
-		t.fnDecl[fqn] = findFuncDecl(k.Name, pkg.Files[pos.Filename])
-		t.dirty[pos.Filename] = true
-		t.mu.Unlock()
+		t.addFunctionLocked(k.Pos(), fn, "")
 	}
 	if found == 0 {
 		return fmt.Errorf("failed to find any exported functions in %v for %s", pkgPath, fnRE)
@@ -394,14 +412,14 @@ func (t *T) findFunctions(ctx context.Context, pkgPath string, fnRE *regexp.Rege
 }
 
 type sortByPos struct {
-	name        string
-	fn          *types.Func
-	file        *ast.File
-	pos         token.Position
-	fnDecl      *ast.FuncDecl
-	ifc         *types.Interface
-	ifcDecl     *ast.TypeSpec
-	implemented []string
+	name       string
+	fn         *types.Func
+	file       *ast.File
+	pos        token.Position
+	fnDecl     *ast.FuncDecl
+	ifc        *types.Interface
+	ifcDecl    *ast.TypeSpec
+	implements []string
 }
 
 func sorter(sorted []sortByPos) {
@@ -415,13 +433,14 @@ func sorter(sorted []sortByPos) {
 
 // WalkFunctions calls the supplied function for each function location,
 // ordered by filename and then position within file.
+// TODO: document the parameters.
 func (t *T) WalkFunctions(fn func(
-	name string,
+	fullname string,
 	fset *token.FileSet,
 	info *types.Info,
 	fn *types.Func,
 	decl *ast.FuncDecl,
-	implemented []string)) {
+	implements []string)) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	sorted := make([]sortByPos, len(t.implementations)+len(t.functions))
@@ -429,11 +448,11 @@ func (t *T) WalkFunctions(fn func(
 	for k, v := range t.implementations {
 		decl := t.fnDecl[k]
 		sorted[i] = sortByPos{
-			name:        k,
-			pos:         t.fset.Position(decl.Type.Func),
-			fn:          v,
-			fnDecl:      decl,
-			implemented: t.implemented[k],
+			name:       k,
+			pos:        t.fset.Position(decl.Type.Func),
+			fn:         v,
+			fnDecl:     decl,
+			implements: t.implements[k],
 		}
 		i++
 	}
@@ -450,14 +469,15 @@ func (t *T) WalkFunctions(fn func(
 	sorter(sorted)
 	for _, loc := range sorted {
 		info := t.checked[loc.fn.Pkg().Path()]
-		fn(loc.name, t.fset, info, loc.fn, loc.fnDecl, loc.implemented)
+		fn(loc.name, t.fset, info, loc.fn, loc.fnDecl, loc.implements)
 	}
 }
 
 // WalkInterfaces calls the supplied function for each interface location,
 // ordered by filename and then position within file.
+// TODO: document the parameters.
 func (t *T) WalkInterfaces(fn func(
-	name string,
+	fullname string,
 	fset *token.FileSet,
 	info *types.Info,
 	decl *ast.TypeSpec,
@@ -489,6 +509,7 @@ func (t *T) WalkInterfaces(fn func(
 
 // WalkFiles calls the supplied function for each file that contains
 // a located interface or function, ordered by filename.
+// TODO: document the parameters.
 func (t *T) WalkFiles(fn func(
 	name string,
 	fileSet *token.FileSet,
@@ -530,13 +551,17 @@ func ImportBlock(file *ast.File) (start, end token.Pos) {
 	return
 }
 
-func findFuncDecl(name string, file *ast.File) *ast.FuncDecl {
+func findFuncOrMethodDecl(fn *types.Func, file *ast.File) *ast.FuncDecl {
+	if file == nil {
+		fmt.Fprintf(os.Stderr, "findFuncDecl: %v: %p\n", fn.FullName(), file)
+		fmt.Fprintf(os.Stderr, "called from: %s\n", string(debug.Stack()))
+	}
 	for _, d := range file.Decls {
 		d, ok := d.(*ast.FuncDecl)
 		if !ok {
 			continue
 		}
-		if name == d.Name.Name {
+		if d.Name.NamePos == fn.Pos() {
 			return d
 		}
 	}

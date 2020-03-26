@@ -16,7 +16,7 @@ import (
 )
 
 func compareLocations(t *testing.T, value string, prefixes, suffixes []string) {
-	loc := errors.Caller(1, 1)
+	loc := errors.Caller(2, 1)
 	locations := strings.Split(value, "\n")
 	if got, want := len(locations), len(suffixes)+1; got != want {
 		t.Errorf("%v: got %v, want %v", loc, got, want)
@@ -64,12 +64,12 @@ func compareFiles(t *testing.T, files string, expected ...string) {
 
 func compareSlices(t *testing.T, got, want []string) {
 	if got, want := len(got), len(want); got != want {
-		t.Errorf("%v: got %v, want %v", errors.Caller(1, 1), got, want)
+		t.Errorf("%v: got %v, want %v", errors.Caller(2, 1), got, want)
 		return
 	}
 	for i := range got {
 		if got, want := got[i], want[i]; !strings.HasSuffix(got, want) {
-			t.Errorf("%v: got %v does not end with %v", errors.Caller(1, 1), got, want)
+			t.Errorf("%v: got %v does not end with %v", errors.Caller(2, 1), got, want)
 			return
 		}
 	}
@@ -163,7 +163,7 @@ func TestFunctions(t *testing.T) {
 		t.Fatalf("locate.AddFunctions: %v", err)
 	}
 	compareLocations(t, locator.Functions(), []string{
-		here + "data.Fn2 func",
+		here + "data.Fn2",
 	}, []string{
 		here + "data/functions_more.go:3:1",
 	})
@@ -175,15 +175,15 @@ func TestFunctions(t *testing.T) {
 		t.Fatalf("locate.AddFunctions: %v", err)
 	}
 	compareLocations(t, locator.Functions(), []string{
-		here + "data.Fn1 func",
-		here + "data.Fn2 func",
+		here + "data.Fn1",
+		here + "data.Fn2",
 	}, []string{
 		"data/functions.go:7:1",
 		"data/functions_more.go:3:1",
 	})
 	compareLocations(t, locator.Functions(), []string{
-		here + "data.Fn1 func",
-		here + "data.Fn2 func",
+		here + "data.Fn1",
+		here + "data.Fn2",
 	}, []string{
 		"data/functions.go:7:1",
 		"data/functions_more.go:3:1",
@@ -211,7 +211,7 @@ func TestFunctionsAndInterfaces(t *testing.T) {
 		filepath.Join("data", "interfaces.go") + ":12:6",
 	})
 	compareLocations(t, locator.Functions(), []string{
-		here + "data.Fn2 func",
+		here + "data.Fn2",
 	}, []string{
 		filepath.Join("data", "functions_more.go") + ":3:1",
 	})
@@ -246,7 +246,7 @@ func TestImports(t *testing.T) {
 		t.Fatalf("locate.AddFunctions: %v", err)
 	}
 	start, stop := []string{}, []string{}
-	locator.WalkFiles(func(name string, fset *token.FileSet, file *ast.File) {
+	locator.WalkFiles(func(fullname string, fset *token.FileSet, file *ast.File) {
 		begin, end := locate.ImportBlock(file)
 		start = append(start, fset.Position(begin).String())
 		stop = append(stop, fset.Position(end).String())
@@ -287,7 +287,7 @@ func TestFunctionDecls(t *testing.T) {
 		t.Fatalf("locate.Do: %v", err)
 	}
 	start, stop := []string{}, []string{}
-	locator.WalkFunctions(func(name string, fset *token.FileSet, info *types.Info, fn *types.Func, decl *ast.FuncDecl, implemented []string) {
+	locator.WalkFunctions(func(fullname string, fset *token.FileSet, info *types.Info, fn *types.Func, decl *ast.FuncDecl, implemented []string) {
 		begin := decl.Body.Pos()
 		end := decl.Body.End()
 		start = append(start, fset.Position(begin).String())
@@ -299,6 +299,9 @@ func TestFunctionDecls(t *testing.T) {
 		"impls.go:5:22",
 		"impls.go:9:28",
 		"impls.go:15:31",
+		"impls.go:22:23",
+		"impls.go:26:29",
+		"impls.go:30:32",
 	}
 	stopAt := []string{
 		"functions.go:9:2",
@@ -306,6 +309,9 @@ func TestFunctionDecls(t *testing.T) {
 		"impls.go:7:2",
 		"impls.go:11:2",
 		"impls.go:18:2",
+		"impls.go:24:2",
+		"impls.go:28:2",
+		"impls.go:33:2",
 	}
 	compareSlices(t, start, startAt)
 	compareSlices(t, stop, stopAt)
