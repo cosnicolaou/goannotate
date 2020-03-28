@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"go/ast"
 	"go/build"
-	"go/importer"
 	"go/parser"
 	"go/token"
 	"go/types"
@@ -55,8 +54,10 @@ type body struct {
 
 // T represents the ability to locate functions and interface implementations.
 type T struct {
-	fset *token.FileSet
-	mu   sync.Mutex
+	options  options
+	fset     *token.FileSet
+	importer types.Importer
+	mu       sync.Mutex
 	// GUARDED_BY(mu), indexed by <package-path>
 	built   map[string]*build.Package
 	parsed  map[string]*ast.Package
@@ -75,9 +76,43 @@ type T struct {
 	dirty map[string]bool
 }
 
+type options struct {
+	concurrency               int
+	ignoreMissingFunctionsEtc bool
+	trace                     func(string, ...interface{})
+}
+
+type Option func(*options)
+
+// Concurrency sets the number of goroutines to use. 0 implies no limit.
+func Concurrency(c int) Option {
+	return func(o *options) {
+		o.concurrency = c
+	}
+}
+
+// Trace sets a trace function
+func Trace(fn func(string, ...interface{})) Option {
+	return func(o *options) {
+		o.trace = fn
+	}
+}
+
+// IgnoreMissingFuctionsEtc prevents errors due to packages not containing
+// any exported matching interfaces and functions.
+func IgnoreMissingFuctionsEtc() Option {
+	return func(o *options) {
+		o.ignoreMissingFunctionsEtc = true
+	}
+}
+
+// TODO:
+// options for 'ignoring' no interfaces or functions found in package.
+// options for 'ignoring' errors due to cgo.
+
 // New returns a new instance of T.
-func New() *T {
-	return &T{
+func New(options ...Option) *T {
+	t := &T{
 		built:           make(map[string]*build.Package),
 		parsed:          make(map[string]*ast.Package),
 		checked:         make(map[string]*types.Info),
@@ -91,6 +126,18 @@ func New() *T {
 		dirty:           make(map[string]bool),
 		fset:            token.NewFileSet(),
 	}
+	t.importer = newCachingImporter(t.fset, t.trace)
+	for _, fn := range options {
+		fn(&t.options)
+	}
+	return t
+}
+
+func (t *T) trace(format string, args ...interface{}) {
+	if t.options.trace == nil {
+		return
+	}
+	t.options.trace(format, args...)
 }
 
 func (t *T) build(pkgPath string) (*build.Package, error) {
@@ -98,6 +145,7 @@ func (t *T) build(pkgPath string) (*build.Package, error) {
 	built := t.built[pkgPath]
 	t.mu.Unlock()
 	if built != nil {
+		t.trace("built: cache: %v\n", pkgPath)
 		return built, nil
 	}
 	context := build.Default
@@ -107,6 +155,7 @@ func (t *T) build(pkgPath string) (*build.Package, error) {
 	}
 	t.mu.Lock()
 	t.built[pkgPath] = built
+	t.trace("built: %v\n", pkgPath)
 	t.mu.Unlock()
 	return built, nil
 }
@@ -120,6 +169,7 @@ func (t *T) buildAndParse(pkgPath string) (*build.Package, *ast.Package, error) 
 	parsed := t.parsed[pkgPath]
 	t.mu.Unlock()
 	if parsed != nil {
+		t.trace("parsed: cache: %v\n", pkgPath)
 		return built, parsed, nil
 	}
 	ignoreTestFiles := func(info os.FileInfo) bool {
@@ -142,6 +192,7 @@ func (t *T) buildAndParse(pkgPath string) (*build.Package, *ast.Package, error) 
 	}
 	t.mu.Lock()
 	t.parsed[pkgPath] = parsed
+	t.trace("parsed: %v\n", pkgPath)
 	t.mu.Unlock()
 	return built, parsed, nil
 }
@@ -155,11 +206,12 @@ func (t *T) buildParseAndCheck(pkgPath string) (*types.Info, error) {
 	checked := t.checked[pkgPath]
 	t.mu.Unlock()
 	if checked != nil {
+		t.trace("type checked: cache: %v\n", pkgPath)
 		return checked, nil
 	}
 	config := types.Config{
 		IgnoreFuncBodies: false,
-		Importer:         importer.ForCompiler(t.fset, "source", nil),
+		Importer:         t.importer,
 	}
 	info := &types.Info{
 		Defs: make(map[*ast.Ident]types.Object),
@@ -177,10 +229,11 @@ func (t *T) buildParseAndCheck(pkgPath string) (*types.Info, error) {
 	}
 	t.mu.Lock()
 	for _, f := range files {
-		pos := t.fset.Position(f.Pos())
+		pos := t.fset.PositionFor(f.Pos(), false)
 		t.files[pos.Filename] = f
 	}
 	t.checked[pkgPath] = info
+	t.trace("type checked: %v\n", pkgPath)
 	t.mu.Unlock()
 	return info, nil
 }
@@ -199,12 +252,13 @@ func (t *T) buildParseAndCheck(pkgPath string) (*types.Info, error) {
 //   acme.com/a/b.thisInterface$
 func (t *T) AddInterfaces(ctx context.Context, interfaces ...string) error {
 	group, ctx := errgroup.WithContext(ctx)
+	group = errgroup.WithConcurrency(group, t.options.concurrency)
 	for _, ifc := range interfaces {
 		pkgPath, ifcRE, err := packageName(ifc)
 		if err != nil {
 			return err
 		}
-		group.Go(func() error {
+		group.GoContext(ctx, func() error {
 			return t.findInterfaces(ctx, pkgPath, ifcRE)
 		})
 	}
@@ -216,12 +270,13 @@ func (t *T) AddInterfaces(ctx context.Context, interfaces ...string) error {
 // package local component as per AddInterfaces.
 func (t *T) AddFunctions(ctx context.Context, names ...string) error {
 	group, ctx := errgroup.WithContext(ctx)
+	group = errgroup.WithConcurrency(group, t.options.concurrency)
 	for _, name := range names {
 		pkgPath, nameRE, err := packageName(name)
 		if err != nil {
 			return err
 		}
-		group.Go(func() error {
+		group.GoContext(ctx, func() error {
 			return t.findFunctions(ctx, pkgPath, nameRE)
 		})
 	}
@@ -234,7 +289,7 @@ func (t *T) Interfaces() string {
 	t.WalkInterfaces(func(name string, fset *token.FileSet, info *types.Info, decl *ast.TypeSpec, ifc *types.Interface) {
 		out.WriteString(name)
 		out.WriteString(" interface ")
-		out.WriteString(fset.Position(decl.Pos()).String())
+		out.WriteString(fset.PositionFor(decl.Pos(), false).String())
 		out.WriteString("\n")
 	})
 	return out.String()
@@ -251,7 +306,7 @@ func (t *T) Functions() string {
 			out.WriteString(strings.Join(implements, ", "))
 		}
 		out.WriteString(" @ ")
-		out.WriteString(fset.Position(decl.Type.Func).String())
+		out.WriteString(fset.PositionFor(decl.Type.Func, false).String())
 		out.WriteString("\n")
 	})
 	return out.String()
@@ -289,10 +344,12 @@ func (t *T) addInterfaceLocked(pos token.Pos, pkg, name string, ifcType *types.I
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	fqn := pkg + "." + name
-	filename := t.fset.File(pos).Name()
+	position := t.fset.PositionFor(pos, false)
+	filename := position.Filename
 	t.interfaces[fqn] = ifcType
 	t.interfaceDecl[fqn] = findInterfaceDecl(name, t.files[filename])
 	t.dirty[filename] = true
+	t.trace("interface: %v @ %v\n", fqn, position)
 }
 
 func (t *T) findInterfaces(ctx context.Context, pkgPath string, ifcRE *regexp.Regexp) error {
@@ -352,7 +409,7 @@ func (t *T) findInterfaces(ctx context.Context, pkgPath string, ifcRE *regexp.Re
 		t.addInterfaceLocked(k.Pos(), pkgPath, k.Name, ifcType)
 
 	}
-	if found == 0 {
+	if !t.options.ignoreMissingFunctionsEtc && found == 0 {
 		return fmt.Errorf("failed to find any exported interfaces in %v for %s", pkgPath, ifcRE)
 	}
 	return nil
@@ -365,17 +422,23 @@ func (t *T) addFunctionLocked(pos token.Pos, fnType *types.Func, implementsIfc s
 }
 
 func (t *T) addFunction(pos token.Pos, fnType *types.Func, implementsIfc string) {
-	filename := t.fset.File(pos).Name()
+	position := t.fset.PositionFor(pos, false)
+	filename := position.Filename
 	file := t.files[filename]
 	if file == nil {
-		fmt.Fprintf(os.Stderr, "%v: %v -> nil: %v files\n", filename, pos, len(t.files))
+		fmt.Fprintf(os.Stderr, "%v: %v -> nil: %v files\n", filename, position, len(t.files))
+		for f := range t.files {
+			fmt.Fprintf(os.Stderr, "file: %v\n", f)
+		}
 	}
 	fqn := fnType.FullName()
 	if len(implementsIfc) > 0 {
 		t.implements[fqn] = append(t.implements[fqn], implementsIfc)
 		t.implementations[fqn] = fnType
+		t.trace("method: %v implementing %v @ %v\n", fqn, implementsIfc, position)
 	} else {
 		t.functions[fqn] = fnType
+		t.trace("function: %v @ %v\n", fqn, position)
 	}
 	t.fnDecl[fqn] = findFuncOrMethodDecl(fnType, file)
 	t.dirty[filename] = true
@@ -405,7 +468,7 @@ func (t *T) findFunctions(ctx context.Context, pkgPath string, fnRE *regexp.Rege
 		found++
 		t.addFunctionLocked(k.Pos(), fn, "")
 	}
-	if found == 0 {
+	if !t.options.ignoreMissingFunctionsEtc && found == 0 {
 		return fmt.Errorf("failed to find any exported functions in %v for %s", pkgPath, fnRE)
 	}
 	return nil
@@ -449,7 +512,7 @@ func (t *T) WalkFunctions(fn func(
 		decl := t.fnDecl[k]
 		sorted[i] = sortByPos{
 			name:       k,
-			pos:        t.fset.Position(decl.Type.Func),
+			pos:        t.fset.PositionFor(decl.Type.Func, false),
 			fn:         v,
 			fnDecl:     decl,
 			implements: t.implements[k],
@@ -460,7 +523,7 @@ func (t *T) WalkFunctions(fn func(
 		decl := t.fnDecl[k]
 		sorted[i] = sortByPos{
 			name:   k,
-			pos:    t.fset.Position(decl.Type.Func),
+			pos:    t.fset.PositionFor(decl.Type.Func, false),
 			fn:     v,
 			fnDecl: decl,
 		}
@@ -490,7 +553,7 @@ func (t *T) WalkInterfaces(fn func(
 		decl := t.interfaceDecl[k]
 		sorted[i] = sortByPos{
 			name:    k,
-			pos:     t.fset.Position(decl.Pos()),
+			pos:     t.fset.PositionFor(decl.Pos(), false),
 			ifc:     v,
 			ifcDecl: decl,
 		}

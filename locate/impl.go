@@ -43,9 +43,10 @@ func (t *T) Do(ctx context.Context, builder build.Context, packages ...string) e
 		return fmt.Errorf("failed to list packages: %w", err)
 	}
 	group, ctx := errgroup.WithContext(ctx)
+	group = errgroup.WithConcurrency(group, t.options.concurrency)
 	for _, pkg := range pkgs {
 		pkg := pkg
-		group.Go(func() error {
+		group.GoContext(ctx, func() error {
 			return t.findInPkg(ctx, builder, pkg)
 		})
 	}
