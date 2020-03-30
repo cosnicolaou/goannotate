@@ -17,3 +17,9 @@ type Ifc3 interface {
 	Ifc1
 	Ifc2
 }
+
+type StructExampleIgnored struct {
+	Field Ifc3
+}
+
+var IgnoredVariable Ifc2

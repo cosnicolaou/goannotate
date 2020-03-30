@@ -37,3 +37,11 @@ type Other struct{}
 func (o *Other) M1() {
 
 }
+
+type WithInterfaceField struct {
+	A int
+	B interface {
+		M1()
+		M2(string)
+	}
+}

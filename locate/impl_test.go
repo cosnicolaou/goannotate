@@ -2,7 +2,6 @@ package locate_test
 
 import (
 	"context"
-	"go/build"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -31,11 +30,10 @@ func TestImpl(t *testing.T) {
 	if err != nil {
 		t.Fatalf("locate.AddInterfaces: %v", err)
 	}
-	err = locator.Do(ctx, build.Default, here+"data", here+"impl")
+	err = locator.Do(ctx, here+"data", here+"impl")
 	if err != nil {
 		t.Fatalf("locate.Do: %v", err)
 	}
-
 	compareLocations(t, locator.Functions(), []string{
 		"(*" + here + "impl.Impl1).M1 implements " + implements("Ifc1"),
 		"(*" + here + "impl.Impl1).M2 implements " + implements("Ifc1"),

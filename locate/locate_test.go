@@ -3,7 +3,6 @@ package locate_test
 import (
 	"context"
 	"go/ast"
-	"go/build"
 	"go/token"
 	"go/types"
 	"path/filepath"
@@ -121,8 +120,20 @@ func TestInterfaces(t *testing.T) {
 
 func TestEmbeddedInterfaces(t *testing.T) {
 	ctx := context.Background()
-	locator := locate.New()
+
+	locator := locate.New(locate.IgnoreMissingFuctionsEtc())
 	err := locator.AddInterfaces(ctx,
+		here+"data/embedded.StructEmbed",
+	)
+	if err != nil {
+		t.Fatalf("locate.AddInterfaces: %v", err)
+	}
+	if got, want := locator.Interfaces(), ""; got != want {
+		t.Errorf("got %v, want %v", got, want)
+	}
+
+	locator = locate.New()
+	err = locator.AddInterfaces(ctx,
 		here+"data/embedded.IfcE$",
 	)
 	if err != nil {
@@ -145,6 +156,7 @@ func TestEmbeddedInterfaces(t *testing.T) {
 		filepath.Join("data", "embedded", "embedded.go")+": embedded",
 		filepath.Join("data", "embedded", "pkg", "interface.go")+": pkg",
 	)
+
 }
 
 func TestFunctions(t *testing.T) {
@@ -221,15 +233,15 @@ func TestMultiPackageError(t *testing.T) {
 	ctx := context.Background()
 	locator := locate.New()
 	err := locator.AddInterfaces(ctx, here+"multipackage")
-	if err == nil || !strings.Contains(err.Error(), "contains more than one package:") {
+	if err == nil || !strings.Contains(err.Error(), "failed to type check: github.com/cosnicolaou/goannotate/locate/testdata/multipackage") {
 		t.Fatalf("expected a specific error, but got: %v", err)
 	}
 	err = locator.AddInterfaces(ctx, here+"parseerror")
-	if err == nil || !strings.Contains(err.Error(), "failed to parse dir") {
+	if err == nil || !strings.Contains(err.Error(), "failed to type check: github.com/cosnicolaou/goannotate/locate/testdata/parseerror") {
 		t.Fatalf("expected a specific error, but got: %v", err)
 	}
 	err = locator.AddInterfaces(ctx, here+"typeerror")
-	if err == nil || !strings.Contains(err.Error(), "failed to typecheck") {
+	if err == nil || !strings.Contains(err.Error(), "failed to type check: github.com/cosnicolaou/goannotate/locate/testdata/typeerror") {
 		t.Fatalf("expected a specific error, but got: %v", err)
 	}
 	err = locator.AddInterfaces(ctx, here+"multipackage.(")
@@ -282,7 +294,7 @@ func TestFunctionDecls(t *testing.T) {
 	if err != nil {
 		t.Fatalf("locate.AddInterfaces: %v", err)
 	}
-	err = locator.Do(ctx, build.Default, here+"data", here+"impl")
+	err = locator.Do(ctx, here+"data", here+"impl")
 	if err != nil {
 		t.Fatalf("locate.Do: %v", err)
 	}

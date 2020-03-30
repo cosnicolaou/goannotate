@@ -30,3 +30,7 @@ type IfcEIgnore interface {
 	pkg.Pkg
 	M1() int
 }
+
+type Embedded struct {
+	pkg.StructEmbed
+}

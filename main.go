@@ -5,8 +5,8 @@ import (
 	"flag"
 	"fmt"
 	"go/ast"
-	"go/build"
 	"go/token"
+	"go/types"
 	"io"
 	"os"
 	"os/exec"
@@ -91,7 +91,7 @@ func handleDebug(ctx context.Context, cfg Debug) (func(), error) {
 			cpu.Close()
 			return func() {}, err
 		}
-		fmt.Printf("writing cpu profile to: %v .. %v\n", filename, cpu)
+		fmt.Printf("writing cpu profile to: %v\n", filename)
 	}
 	return func() {
 		pprof.StopCPUProfile()
@@ -159,14 +159,31 @@ func main() {
 	trace("locating functions...\n")
 	errs.Append(locator.AddFunctions(ctx, functions...))
 	trace("locating interface implementatations...\n")
-	errs.Append(locator.Do(ctx, build.Default, packages...))
-
+	errs.Append(locator.Do(ctx, packages...))
 	if err := errs.Err(); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to locate functions and/or interface implementations: %v\n", err)
 		os.Exit(1)
 	}
+	trace("walking interfaces...\n")
+	locator.WalkInterfaces(func(
+		fullname string,
+		fset *token.FileSet,
+		info *types.Info,
+		decl *ast.TypeSpec,
+		ifc *types.Interface) {
+		fmt.Printf("%v @ %v\n", fullname, fset.PositionFor(decl.Pos(), false))
+	})
+	trace("walking functions...\n")
+	locator.WalkFunctions(func(fullname string, fset *token.FileSet, info *types.Info, fn *types.Func, decl *ast.FuncDecl, implements []string) {
+		if decl == nil {
+			panic("Opps")
+		}
+		fmt.Printf("%v @ %v\n", fullname, fset.PositionFor(decl.Pos(), false))
+
+	})
 	trace("walking files...\n")
 	locator.WalkFiles(func(filename string, fset *token.FileSet, file *ast.File) {
 		fmt.Printf("%v\n", filename)
 	})
+
 }
