@@ -1,13 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"flag"
 	"fmt"
 	"go/ast"
-	"go/token"
 	"go/types"
 	"io"
+	"io/ioutil"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -16,7 +17,9 @@ import (
 	"time"
 
 	"cloudeng.io/errors"
+	"cloudeng.io/text/edit"
 	"github.com/cosnicolaou/goannotate/locate"
+	"golang.org/x/tools/go/packages"
 )
 
 var (
@@ -26,7 +29,7 @@ var (
 )
 
 func init() {
-	flag.StringVar(&ConfigFileFlag, "config-file", "goannotate.json", "json configuration file")
+	flag.StringVar(&ConfigFileFlag, "config-file", "config.yaml", "yaml configuration file")
 	flag.BoolVar(&VerboseFlag, "verbose", false, "display verbose debug info")
 	flag.BoolVar(&ProgressFlag, "progress", true, "display progress info")
 }
@@ -142,7 +145,7 @@ func main() {
 	functions, err := listPackages(ctx, config.Functions)
 	errs.Append(err)
 	trace("listing packages for implementations...\n")
-	packages, err := listPackages(ctx, config.Packages)
+	implementationPackages, err := listPackages(ctx, config.Packages)
 	errs.Append(err)
 	if err := errs.Err(); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to list interfaces, functions or packages: %v\n", err)
@@ -154,36 +157,118 @@ func main() {
 		locate.Trace(trace),
 		locate.IgnoreMissingFuctionsEtc(),
 	)
-	trace("locating interfaces...\n")
-	errs.Append(locator.AddInterfaces(ctx, interfaces...))
-	trace("locating functions...\n")
-	errs.Append(locator.AddFunctions(ctx, functions...))
-	trace("locating interface implementatations...\n")
-	errs.Append(locator.Do(ctx, packages...))
+	locator.AddInterfaces(interfaces...)
+	locator.AddFunctions(functions...)
+	locator.AddPackages(implementationPackages...)
+	trace("locating...\n")
+	errs.Append(locator.Do(ctx))
 	if err := errs.Err(); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to locate functions and/or interface implementations: %v\n", err)
 		os.Exit(1)
 	}
-	trace("walking interfaces...\n")
+
+	trace("interfaces...\n")
 	locator.WalkInterfaces(func(
 		fullname string,
-		fset *token.FileSet,
-		info *types.Info,
+		pkg *packages.Package,
+		file *ast.File,
 		decl *ast.TypeSpec,
 		ifc *types.Interface) {
-		fmt.Printf("%v @ %v\n", fullname, fset.PositionFor(decl.Pos(), false))
+		trace("interface: %v @ %v\n", fullname, pkg.Fset.PositionFor(decl.Pos(), false))
 	})
+
 	trace("walking functions...\n")
-	locator.WalkFunctions(func(fullname string, fset *token.FileSet, info *types.Info, fn *types.Func, decl *ast.FuncDecl, implements []string) {
-		if decl == nil {
-			panic("Opps")
+	edits := map[string][]edit.Delta{}
+
+	locator.WalkFunctions(func(fullname string,
+		pkg *packages.Package,
+		file *ast.File,
+		fn *types.Func,
+		decl *ast.FuncDecl,
+		implements []string) {
+		if config.Annotation.IgnoreEmptyFunctions && isEmpty(decl) {
+			return
 		}
-		fmt.Printf("%v @ %v\n", fullname, fset.PositionFor(decl.Pos(), false))
+		invovation, comment, err := annotationForFunc(&config.Annotation, pkg.Fset, fn, decl)
+		if err != nil {
+			errs.Append(err)
+			return
+		}
+		if alreadyAnnotated(&config.Annotation, pkg.Fset, file, fn, decl, comment) {
+			fmt.Printf("ALREADY DONE\n")
+			return
+		}
 
+		lbrace := pkg.Fset.PositionFor(decl.Body.Lbrace, false)
+		delta := edit.InsertString(lbrace.Offset+1, invovation+" // "+comment)
+		edits[lbrace.Filename] = append(edits[lbrace.Filename], delta)
+		trace("function: %v @ %v\n", fullname, lbrace)
 	})
+
+	importStatement := "\n" + `import "` + config.Annotation.Import + `"` + "\n"
+
 	trace("walking files...\n")
-	locator.WalkFiles(func(filename string, fset *token.FileSet, file *ast.File) {
-		fmt.Printf("%v\n", filename)
+	locator.WalkFiles(func(filename string,
+		pkg *packages.Package,
+		comments ast.CommentMap,
+		file *ast.File) {
+		_, end := locate.ImportBlock(file)
+		pos := pkg.Fset.PositionFor(end, false)
+		delta := edit.InsertString(pos.Offset, importStatement)
+		edits[pos.Filename] = append(edits[pos.Filename], delta)
+		trace("import: %v @ %v\n", importStatement, pos)
 	})
 
+	if err := errs.Err(); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to annotate: %v\n", err)
+		os.Exit(1)
+	}
+
+	for file, edits := range edits {
+		fmt.Printf("%v:\n", file)
+		for _, edit := range edits {
+			fmt.Printf("\t%s: %s\n", edit, edit.Text())
+		}
+		if err := editFile(ctx, file, edits); err != nil {
+			err = fmt.Errorf("failed to edit file: %v: %v", file, err)
+			errs.Append(err)
+		}
+		fmt.Println()
+	}
+
+	// edit each file concurrently.
+
+	if err := errs.Err(); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to edit files: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func editFile(ctx context.Context, name string, deltas []edit.Delta) error {
+	info, err := os.Stat(name)
+	if err != nil {
+		return err
+	}
+	buf, err := ioutil.ReadFile(name)
+	if err != nil {
+		return err
+	}
+	buf = edit.Do(buf, deltas...)
+	cmd := exec.CommandContext(ctx, "goimports")
+	cmd.Stdin = bytes.NewBuffer(buf)
+	out, err := cmd.Output()
+	if err != nil {
+		// This is most likely because the edit messed up the go code
+		// and goimports is unhappy with it as its input. To help with
+		// debugging write the edited code to a temp file.
+		if VerboseFlag {
+			if tmpfile, err := ioutil.TempFile("", "annotate-"); err == nil {
+				io.Copy(tmpfile, bytes.NewBuffer(buf))
+				tmpfile.Close()
+				fmt.Printf("wrote modified contents of %v to %v\n", name, tmpfile.Name())
+			}
+		}
+		return fmt.Errorf("%v: %v", strings.Join(cmd.Args, " "), err)
+	}
+	return ioutil.WriteFile(name, out, info.Mode().Perm())
 }

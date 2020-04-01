@@ -4,29 +4,36 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"runtime"
 	"strings"
+
+	"gopkg.in/yaml.v2"
 )
 
 type AnnotationConfig struct {
-	ContextType string `json:"context_type"`
+	ContextType          string `yaml:"contextType"`
+	Function             string `yaml:"function"`
+	Import               string `yaml:"import"`
+	Owner                string `yaml:"owner"`
+	IgnoreEmptyFunctions bool   `yaml:"ignoreEmptyFunctions"`
 }
 
 type Debug struct {
-	CPUProfile string `json:"cpu_profile"`
+	CPUProfile string `yaml:"cpu_profile"`
 }
 
 type Options struct {
-	Concurrency int `json:"concurrency"`
+	Concurrency int `yaml:"concurrency"`
 }
 
 type Config struct {
-	Interfaces []string         `json:"interfaces"`
-	Functions  []string         `json:"functions"`
-	Packages   []string         `json:"packages"`
-	Annotation AnnotationConfig `json:"annotation"`
-	Debug      Debug            `json:"debug"`
-	Options    Options          `json:"options"`
+	Interfaces []string         `yam:"interfaces"`
+	Functions  []string         `yam:"functions"`
+	Packages   []string         `yam:"packages"`
+	Annotation AnnotationConfig `yam:"annotation,flow"`
+	Debug      Debug            `yam:"debug,flow"`
+	Options    Options          `yam:"options,flow"`
 }
 
 func ConfigFromFile(filename string) (*Config, error) {
@@ -35,9 +42,13 @@ func ConfigFromFile(filename string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to read config file: %v", err)
 	}
-	if err := json.Unmarshal(buf, config); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal %v: %v", filename, err)
+	err = yaml.Unmarshal(buf, config)
+	if err != nil {
+		log.Fatalf("error: %v", err)
 	}
+	/*	if err := json.Unmarshal(buf, config); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal %v: %v", filename, err)
+	}*/
 	config.configureDefaults()
 	return config, err
 }

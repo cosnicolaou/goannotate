@@ -3,14 +3,14 @@ package annotations_test
 import (
 	"context"
 	"go/ast"
-	"go/build"
-	"go/token"
 	"go/types"
+	"strings"
 	"testing"
 
 	"cloudeng.io/errors"
 	"github.com/cosnicolaou/goannotate/annotations"
 	"github.com/cosnicolaou/goannotate/locate"
+	"golang.org/x/tools/go/packages"
 )
 
 const testdata = "github.com/cosnicolaou/goannotate/annotations/testdata/examples"
@@ -18,10 +18,8 @@ const testdata = "github.com/cosnicolaou/goannotate/annotations/testdata/example
 func TestFormatting(t *testing.T) {
 	ctx := context.Background()
 	locator := locate.New()
-	if err := locator.AddFunctions(ctx, testdata); err != nil {
-		t.Errorf("locate.AddFunctions: %v", err)
-	}
-	if err := locator.Do(ctx, build.Default, testdata); err != nil {
+	locator.AddFunctions(testdata)
+	if err := locator.Do(ctx); err != nil {
 		t.Errorf("locate.Do: %v", err)
 	}
 
@@ -31,20 +29,21 @@ func TestFormatting(t *testing.T) {
 
 	parameters, parametersContext, results := []formatted{}, []formatted{}, []formatted{}
 
-	locator.WalkFunctions(func(name string, fset *token.FileSet, info *types.Info, fn *types.Func, decl *ast.FuncDecl, implemented []string) {
+	locator.WalkFunctions(func(name string, pkg *packages.Package, file *ast.File, fn *types.Func, decl *ast.FuncDecl, implemented []string) {
 		signature := fn.Type().(*types.Signature)
 		spec, args := annotations.ArgsForParams(signature)
-		parameters = append(parameters, formatted{spec, args})
+		parameters = append(parameters, formatted{spec, strings.Join(args, ", ")})
 		if ctxArg, ok := annotations.HasContext(signature); ok {
 			// ignore context.Context at positiohn 0.
 			spec, args = annotations.ArgsForParams(signature, 0)
-			args = ctxArg + ": " + args
+			args = append([]string{ctxArg}, args...)
 		} else {
 			spec, args = annotations.ArgsForParams(signature)
 		}
-		parametersContext = append(parametersContext, formatted{spec, args})
+		parametersContext = append(parametersContext,
+			formatted{spec, strings.Join(args, ", ")})
 		spec, args = annotations.ArgsForResults(signature)
-		results = append(results, formatted{spec, args})
+		results = append(results, formatted{spec, strings.Join(args, ", ")})
 	})
 
 	cmp := func(got, want []formatted) {
@@ -100,9 +99,9 @@ func TestFormatting(t *testing.T) {
 
 	expectedParametersContext := make([]formatted, len(expectedParameters))
 	copy(expectedParametersContext, expectedParameters)
-	expectedParametersContext[12] = j("", "ctx: ")
-	expectedParametersContext[13] = j("a=%d", "ctx: a")
-	expectedParametersContext[14] = j("_=?, c=%t", "ctx: c")
+	expectedParametersContext[12] = j("", "ctx")
+	expectedParametersContext[13] = j("a=%d", "ctx, a")
+	expectedParametersContext[14] = j("_=?, c=%t", "ctx, c")
 
 	cmp(parameters, expectedParameters)
 	cmp(parametersContext, expectedParametersContext)

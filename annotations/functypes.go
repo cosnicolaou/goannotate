@@ -6,10 +6,8 @@ import (
 	"strings"
 )
 
-var (
-	// ContextType is type detected by HasContext.
-	ContextType = "context.Context"
-)
+// ContextType is the standard go context type.
+const ContextType = "context.Context"
 
 func names(ids []*ast.Ident) []string {
 	r := make([]string, len(ids))
@@ -108,7 +106,7 @@ func FormatForVar(v *types.Var) (string, string) {
 // tuple. The number of arguments may be less than the length of the
 // tuple when it contains parameters that are named as '_' or when
 // results are unamed.
-func formatAndArgs(tuple *types.Tuple, variadic bool, ignore map[int]bool) (format, arguments string) {
+func formatAndArgs(tuple *types.Tuple, variadic bool, ignore map[int]bool) (format string, arguments []string) {
 	for i := 0; i < tuple.Len(); i++ {
 		if ignore != nil && ignore[i] {
 			continue
@@ -119,11 +117,10 @@ func formatAndArgs(tuple *types.Tuple, variadic bool, ignore map[int]bool) (form
 		}
 		format += spec + ", "
 		if len(arg) > 0 {
-			arguments += arg + ", "
+			arguments = append(arguments, arg)
 		}
 	}
 	format = strings.TrimSuffix(format, ", ")
-	arguments = strings.TrimSuffix(arguments, ", ")
 	return
 }
 
@@ -132,7 +129,7 @@ func formatAndArgs(tuple *types.Tuple, variadic bool, ignore map[int]bool) (form
 // that those positions should be ignored altogether. This is useful for
 // handling context.Context like arguments which need often need to be
 // handled separately.
-func ArgsForParams(signature *types.Signature, ignoreAtPosition ...int) (format, arguments string) {
+func ArgsForParams(signature *types.Signature, ignoreAtPosition ...int) (format string, arguments []string) {
 	pt := map[int]bool{}
 	for _, v := range ignoreAtPosition {
 		pt[v] = true
@@ -142,7 +139,7 @@ func ArgsForParams(signature *types.Signature, ignoreAtPosition ...int) (format,
 
 // ArgsForResults returns the format and arguments to use to log the
 // function's results.
-func ArgsForResults(signature *types.Signature) (format, arguments string) {
+func ArgsForResults(signature *types.Signature) (format string, arguments []string) {
 	return formatAndArgs(signature.Results(), false, nil)
 }
 
@@ -160,11 +157,17 @@ func ParamAt(signature *types.Signature, pos int) (varName, typeName string, ok 
 // HasContext returns true and the name of the first parameter to the function
 // if that first parameter is context.Context.
 func HasContext(signature *types.Signature) (string, bool) {
+	return HasCustomContext(signature, ContextType)
+}
+
+// HasCustomContext returns true and the name of the first parameter to the function
+// if that first parameter is the specified customContext.
+func HasCustomContext(signature *types.Signature, customContext string) (string, bool) {
 	v, t, ok := ParamAt(signature, 0)
-	if !ok {
+	if !ok || len(t) == 0 {
 		return "", false
 	}
-	if t == ContextType {
+	if t == customContext || (t[0] == '*' && t[1:] == customContext) {
 		return v, true
 	}
 	return "", false

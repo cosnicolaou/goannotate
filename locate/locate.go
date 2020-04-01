@@ -5,12 +5,7 @@ package locate
 
 import (
 	"context"
-	"fmt"
-	"go/ast"
 	"go/token"
-	"go/types"
-	"path"
-	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -20,64 +15,57 @@ import (
 
 type traceFunc func(string, ...interface{})
 
-func packageName(typ string) (pkgPath string, re *regexp.Regexp, err error) {
-	compile := func(expr string) (*regexp.Regexp, error) {
-		re, err = regexp.Compile(expr)
-		if err != nil {
-			return nil, fmt.Errorf("failed to compile regexp: %q: %w", expr, err)
-		}
-		return re, nil
-	}
-	idx := strings.LastIndex(typ, "/")
-	if idx < 0 {
-		re, err = compile(typ)
-		return
-	}
-	dir := typ[:idx]
-	tail := typ[idx+1:]
-	idx = strings.Index(tail, ".")
-	if idx < 0 {
-		pkgPath = path.Join(dir, tail)
-		re, err = compile(".*")
-		return
-	}
-	pkgPath = path.Join(dir, tail[:idx])
-	re, err = compile(tail[idx+1:])
-	return
-}
-
-type interfaceDesc struct {
-	path     string
-	ifc      *types.Interface
-	decl     *ast.TypeSpec
-	position token.Position
-}
-
-type funcDesc struct {
-	path       string
-	fn         *types.Func
-	decl       *ast.FuncDecl
-	position   token.Position
-	implements []string
-}
-
 // T represents the ability to locate functions and interface implementations.
 type T struct {
-	options options
-	loader  *loader
-	mu      sync.Mutex
+	options                options
+	loader                 *loader
+	interfacePackages      []string
+	functionPackages       []string
+	implementationPackages []string
+	commentExpressions     []string
 
-	interfacePackages, functionPackages, implementationPackages []string
-	loadPackages                                                []string
+	mu sync.Mutex
 
 	// GUARDED_BY(mu), indexed by <package-path>.<name>
 	interfaces map[string]interfaceDesc
 	// GUARDED_BY(mu), indexed by types.Func.FullName() which includes
 	// the receiver and hence is unique.
 	functions map[string]funcDesc
+	// GUARDED_BY(mu), indexed by the regular expression that matched them.
+	comments map[string][]commentDesc
+	// GUARDED_BY(mu), indexed by filename.
+	dirty map[string]HitMask
+}
 
-	// GUARDED_BY(mu), indexed by filename
-	dirty map[string]bool
+type HitMask int
+
+const (
+	HasComment HitMask = 1 << iota
+	HasFunction
+	HasInterface
+	hitSentinel
+)
+
+var hitNames = []string{
+	"comment",
+	"function",
+	"interface",
+}
+
+func (hm HitMask) String() string {
+	parts := []string{}
+	hit := 0
+	for {
+		mask := 1 << hit
+		if mask == int(hitSentinel) {
+			break
+		}
+		if (mask & int(hm)) != 0 {
+			parts = append(parts, hitNames[hit])
+		}
+		hit++
+	}
+	return strings.Join(parts, ", ")
 }
 
 type options struct {
@@ -119,7 +107,8 @@ func New(options ...Option) *T {
 	t := &T{
 		interfaces: make(map[string]interfaceDesc),
 		functions:  make(map[string]funcDesc),
-		dirty:      make(map[string]bool),
+		dirty:      make(map[string]HitMask),
+		comments:   make(map[string][]commentDesc),
 	}
 	t.loader = newLoader(t.trace)
 	for _, fn := range options {
@@ -148,47 +137,53 @@ func (t *T) trace(format string, args ...interface{}) {
 //   acme.com/a/b.prefix
 //   acme.com/a/b.thisInterface$
 func (t *T) AddInterfaces(interfaces ...string) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
 	t.interfacePackages = append(t.interfacePackages, interfaces...)
-	t.loadPackages = append(t.loadPackages, interfaces...)
+
 }
 
 // AddFunctions adds functions to be located. The function names are specified
 // as fully qualified names with a regular expression being accepted for the
 // package local component as per AddInterfaces.
 func (t *T) AddFunctions(functions ...string) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
 	t.functionPackages = append(t.functionPackages, functions...)
-	t.loadPackages = append(t.loadPackages, functions...)
-
 }
 
 // AddPackages adds packages that will be searched for implementations
 // of interfaces specified via AddInterfaces.
 func (t *T) AddPackages(packages ...string) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
 	t.implementationPackages = append(t.implementationPackages, packages...)
-	t.loadPackages = append(t.loadPackages, packages...)
+}
 
+// AddComments adds regular expressions to be matched against the contents
+// of comments.
+func (t *T) AddComments(comments ...string) {
+	t.commentExpressions = append(t.commentExpressions, comments...)
 }
 
 // Do locates implementations of previously added interfaces and functions.
 func (t *T) Do(ctx context.Context) error {
-	if err := t.loader.loadRegex(t.loadPackages...); err != nil {
+	interfaces := dedup(t.interfacePackages)
+	functions := dedup(t.functionPackages)
+	packages := dedup(t.implementationPackages)
+	allPackages := packagesToLoad(interfaces, functions, packages)
+	comments := dedup(t.commentExpressions)
+	if err := t.loader.loadPaths(allPackages); err != nil {
 		return err
 	}
-	group, ctx := errgroup.WithContext(ctx)
-	group = errgroup.WithConcurrency(group, t.options.concurrency)
-	for _, pkg := range packages {
-		pkg := pkg
-		group.GoContext(ctx, func() error {
-			return t.findInPkg(ctx, pkg)
-		})
+	if err := t.findInterfaces(ctx, interfaces); err != nil {
+		return err
 	}
-	return group.Wait()
+	grp, ctx := errgroup.WithContext(ctx)
+	grp.GoContext(ctx, func() error {
+		return t.findFunctions(ctx, functions)
+	})
+	grp.GoContext(ctx, func() error {
+		return t.findImplementations(ctx, packages)
+	})
+	grp.GoContext(ctx, func() error {
+		return t.findComments(ctx, comments)
+	})
+	return grp.Wait()
 }
 
 type sortByPos struct {
