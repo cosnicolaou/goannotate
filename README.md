@@ -1,2 +1,2 @@
 # goannotate
-goannotate is a tool for adding annotations, typically logging, to methods implementing go interfaces
+This has been moved to cloudeng.io/go/cmd/goannotate.
