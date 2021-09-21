@@ -58,6 +58,28 @@ func (t *T) findFunctionsInPackage(ctx context.Context, pkgPath string, fnRE *re
 	return nil
 }
 
+func (t *T) addFunction2(desc locateutil.FuncDesc, path string, implements string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+}
+
+func (t *T) addFunctionLocked2(desc locateutil.FuncDesc, path string, implements string) {
+	fqn := fnType.FullName()
+	var ifcs []string
+	if len(implements) > 0 {
+		ifcs = append(t.functions[fqn].implements, implements)
+		t.trace("method: %v implementing %v @ %v\n", fqn, implements, position)
+	} else {
+		t.trace("function: %v @ %v\n", fqn, position)
+	}
+	t.functions[fqn] = funcDesc{
+		FuncDesc:   desc,
+		path:       path,
+		implements: ifcs,
+	}
+	t.dirty[filename] |= HasFunction
+}
+
 func findFuncOrMethodDecl(fn *types.Func, file *ast.File) *ast.FuncDecl {
 	for _, d := range file.Decls {
 		d, ok := d.(*ast.FuncDecl)
@@ -109,10 +131,13 @@ func (t *T) addFunctionLocked(path string, pos token.Pos, fnType *types.Func, im
 }
 
 type funcDesc struct {
+	locateutil.FuncDesc
+	// get rid of these three.
+	fn       *types.Func
+	decl     *ast.FuncDecl
+	position token.Position
+
 	path       string
-	fn         *types.Func
-	decl       *ast.FuncDecl
-	position   token.Position
 	implements []string
 }
 
@@ -120,7 +145,8 @@ type funcDesc struct {
 // ordered by filename and then position within file.
 // The function is called with the packages.Package and ast for the file
 // that contains the function, as well as the type and declaration of the
-// function and the list of interfaces that implements.
+// function and the list of interfaces that implements. The function is called
+// in order of filename and then position within filename.
 func (t *T) WalkFunctions(fn func(
 	fullname string,
 	pkg *packages.Package,
@@ -146,21 +172,4 @@ func (t *T) WalkFunctions(fn func(
 		file, _, pkg := t.loader.lookupFile(fnd.position.Filename)
 		fn(loc.name, pkg, file, fnd.fn, fnd.decl, fnd.implements)
 	}
-}
-
-// Functions returns a string representation of all function locations.
-func (t *T) Functions() string {
-	out := strings.Builder{}
-	t.WalkFunctions(func(name string, pkg *packages.Package, file *ast.File, fn *types.Func, decl *ast.FuncDecl, implements []string) {
-		out.WriteString(name)
-		if len(implements) > 0 {
-			out.WriteString(" implements ")
-			sort.Strings(implements)
-			out.WriteString(strings.Join(implements, ", "))
-		}
-		out.WriteString(" @ ")
-		out.WriteString(pkg.Fset.PositionFor(decl.Type.Func, false).String())
-		out.WriteString("\n")
-	})
-	return out.String()
 }
